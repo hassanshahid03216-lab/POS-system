@@ -1,0 +1,7 @@
+PySide6
+Flask
+pyqtgraph
+fpdf2
+python-escpos
+pywin32; platform_system == "Windows"
+pyinstaller

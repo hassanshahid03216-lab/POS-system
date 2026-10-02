@@ -1,0 +1,90 @@
+{% extends 'base.html' %}
+{% block title %}Billing · {{ shop_name }}{% endblock %}
+{% block content %}
+<div class="page-heading"><div><h1>New sale</h1><p>Scan a barcode or search for a product.</p></div></div>
+<section class="panel">
+  <label class="search-label" for="search">Product search</label>
+  <input id="search" class="search" placeholder="Scan barcode or type product name, then press Enter" autocomplete="off" autofocus>
+  <div id="suggestions" class="suggestions"></div>
+  <div class="table-wrap"><table><thead><tr><th>Product</th><th>Qty</th><th>Unit price</th><th>Item discount</th><th>Line total</th><th></th></tr></thead><tbody id="cart-body"></tbody></table></div>
+  <div class="billing-bottom">
+    <div class="inline-controls">
+      <label>Payment mode<select id="payment"><option>Cash</option><option>Card</option><option>JazzCash</option><option>EasyPaisa</option></select></label>
+      <label>Bill discount (Rs)<input id="bill-discount" type="number" min="0" step="0.01" value="0"></label>
+    </div>
+    <div class="totals"><span id="subtotal">Subtotal: Rs 0.00</span><span id="discount-total">Discount: Rs 0.00</span><strong id="total">Total: Rs 0.00</strong></div>
+  </div>
+  <form id="cart-form" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="cart" id="cart-json">
+    <input type="hidden" name="bill_discount" id="bill-discount-hidden">
+    <input type="hidden" name="payment_mode" id="payment-hidden">
+    <div class="button-row">
+      <button type="button" class="button secondary" id="hold">Hold bill</button>
+      {% if held_bills %}<label class="resume-select">Held bill<select id="resume-select"><option value="">Choose a held bill</option>{% for bill in held_bills %}<option value="{{ bill.id }}">{{ bill.label }} · {{ bill.timestamp }}</option>{% endfor %}</select></label><button type="button" class="button secondary" id="resume">Resume</button>{% endif %}
+      <button type="button" class="button secondary" id="new-bill">New bill</button>
+      <button type="submit" class="button primary" id="checkout">Checkout</button>
+    </div>
+  </form>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+const catalog = {{ products|tojson }};
+const initialResume = {{ session.get('resume_bill')|tojson }};
+let cart = [];
+const search = document.getElementById('search');
+const suggestions = document.getElementById('suggestions');
+function money(n) { return 'Rs ' + Number(n || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}); }
+function matches(q) {
+  q = q.trim().toLowerCase(); if (!q) return [];
+  const exact = catalog.filter(p => (p.barcode || '').toLowerCase() === q);
+  return exact.length ? exact : catalog.filter(p => p.name.toLowerCase().includes(q) || (p.barcode || '').toLowerCase().includes(q)).slice(0,8);
+}
+function add(p) {
+  const row = cart.find(item => item.id === p.id);
+  if ((row?.qty || 0) + 1 > p.stock_qty) { alert(`Only ${p.stock_qty} in stock for ${p.name}`); return; }
+  if (row) row.qty++;
+  else cart.push({id:p.id, name:p.name, qty:1, unit_price:Number(p.sale_price), discount:0, stock_qty:p.stock_qty});
+  search.value=''; suggestions.replaceChildren(); render(); search.focus();
+}
+function render() {
+  const body = document.getElementById('cart-body'); body.replaceChildren();
+  cart.forEach((item, index) => {
+    const tr=document.createElement('tr');
+    const name=document.createElement('td'); name.textContent=item.name; tr.append(name);
+    const qty=document.createElement('td'); qty.innerHTML=`<input type="number" min="1" max="${item.stock_qty}" value="${item.qty}" class="small-number">`; qty.firstChild.onchange=e=>{item.qty=Math.min(item.stock_qty,Math.max(1,Number(e.target.value)||1));render();}; tr.append(qty);
+    const price=document.createElement('td'); price.textContent=money(item.unit_price); tr.append(price);
+    const discount=document.createElement('td'); discount.innerHTML=`<input type="number" min="0" max="${item.qty*item.unit_price}" step="0.01" value="${item.discount}" class="small-number">`; discount.firstChild.oninput=e=>{item.discount=Math.min(item.qty*item.unit_price,Math.max(0,Number(e.target.value)||0));renderTotals();}; tr.append(discount);
+    const line=document.createElement('td'); line.textContent=money(item.qty*item.unit_price-item.discount); tr.append(line);
+    const remove=document.createElement('td'); const b=document.createElement('button'); b.type='button'; b.className='button small danger'; b.textContent='Remove'; b.onclick=()=>{cart.splice(index,1);render();}; remove.append(b); tr.append(remove);
+    body.append(tr);
+  });
+  renderTotals();
+}
+function renderTotals() {
+  const subtotal=cart.reduce((s,x)=>s+x.qty*x.unit_price,0), itemDisc=cart.reduce((s,x)=>s+x.discount,0);
+  const bill=document.getElementById('bill-discount'); bill.max=Math.max(0,subtotal-itemDisc); bill.value=Math.min(Number(bill.value)||0,Number(bill.max));
+  document.getElementById('subtotal').textContent='Subtotal: '+money(subtotal);
+  document.getElementById('discount-total').textContent='Discount: '+money(itemDisc+Number(bill.value));
+  document.getElementById('total').textContent='Total: '+money(subtotal-itemDisc-Number(bill.value));
+  document.getElementById('cart-json').value=JSON.stringify(cart);
+  document.getElementById('bill-discount-hidden').value=bill.value;
+  document.getElementById('payment-hidden').value=document.getElementById('payment').value;
+}
+search.addEventListener('input',()=>{
+  suggestions.replaceChildren();
+  matches(search.value).forEach(p=>{const b=document.createElement('button');b.type='button';b.className='suggestion';b.textContent=`${p.name} · ${money(p.sale_price)} · stock ${p.stock_qty}`;b.onclick=()=>add(p);suggestions.append(b);});
+});
+search.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();const found=matches(search.value);if(found.length)add(found[0]);else alert('Product not found.');}});
+document.getElementById('bill-discount').addEventListener('input',renderTotals);
+document.getElementById('payment').addEventListener('change',renderTotals);
+document.getElementById('checkout').onclick=()=>{document.getElementById('cart-form').action='{{ url_for("checkout") }}';renderTotals();};
+document.getElementById('cart-form').addEventListener('submit',e=>{if(!cart.length){e.preventDefault();alert('Add a product before checkout.');}renderTotals();});
+document.getElementById('hold').onclick=()=>{if(!cart.length){alert('Add a product before holding this bill.');return;}document.getElementById('cart-form').action='{{ url_for("hold_bill") }}';renderTotals();document.getElementById('cart-form').submit();};
+document.getElementById('new-bill').onclick=()=>{if(cart.length&&!confirm('Clear this bill? Hold it first if you need it later.'))return;cart=[];document.getElementById('bill-discount').value=0;render();search.focus();};
+const resumeButton=document.getElementById('resume'); if(resumeButton) resumeButton.onclick=()=>{const id=document.getElementById('resume-select').value;if(id)location.href='/resume/'+id;};
+if(initialResume){cart=initialResume.items||[];document.getElementById('bill-discount').value=initialResume.bill_discount||0;document.getElementById('payment').value=initialResume.payment_mode||'Cash';render();}
+render();
+</script>
+{% endblock %}

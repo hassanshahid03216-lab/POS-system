@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}ShopFlow POS{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='shopflow.css') }}">
+</head>
+<body>
+  {% if session.get('user_id') %}
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('billing') }}">{{ shop_name }}</a>
+    <nav>
+      <a href="{{ url_for('billing') }}">Billing</a>
+      {% if session.get('role') == 'admin' %}
+      <a href="{{ url_for('products') }}">Inventory</a>
+      <a href="{{ url_for('insights') }}">Insights</a>
+      <a href="{{ url_for('admin_settings') }}">Settings</a>
+      {% endif %}
+    </nav>
+    <span class="user">{{ session.get('name') }} · {{ session.get('role')|title }}</span>
+    <form method="post" action="{{ url_for('logout') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="button secondary">Log out</button>
+    </form>
+  </header>
+  {% endif %}
+  <main class="page {% if not session.get('user_id') %}login-page{% endif %}">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}<div class="notice {{ category }}">{{ message }}</div>{% endfor %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

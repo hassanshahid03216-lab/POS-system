@@ -1,0 +1,41 @@
+{% extends 'base.html' %}
+{% block title %}Sign in · ShopFlow POS{% endblock %}
+{% block content %}
+<section class="login-card">
+  <h1>{{ shop_name }}</h1>
+  {% if first_run %}
+  <p>Create the shop owner account to get started.</p>
+  <form method="post" class="form-stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="setup">
+    <label>Your name<input name="name" required autocomplete="name"></label>
+    <label>Owner PIN<input id="pin" name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" required placeholder="4–8 digits"></label>
+    <label>Confirm PIN<input name="confirm_pin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" required></label>
+    <button class="button primary">Create owner account</button>
+  </form>
+  {% else %}
+  <p>Enter your staff PIN</p>
+  <form method="post" id="login-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="login">
+    <input id="pin" class="pin-display" name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" required autofocus>
+    <div class="pin-pad">
+      {% for n in ['1','2','3','4','5','6','7','8','9','Clear','0','⌫'] %}
+      <button type="button" class="button keypad" data-key="{{ n }}">{{ n }}</button>
+      {% endfor %}
+    </div>
+    <button class="button primary wide">Sign in</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}
+{% block scripts %}<script>
+const pin = document.getElementById('pin');
+document.querySelectorAll('[data-key]').forEach(button => button.addEventListener('click', () => {
+  const key = button.dataset.key;
+  if (key === 'Clear') pin.value = '';
+  else if (key === '⌫') pin.value = pin.value.slice(0, -1);
+  else if (/^\d$/.test(key) && pin.value.length < 8) pin.value += key;
+  pin.focus();
+}));
+</script>{% endblock %}
