@@ -35,8 +35,17 @@ def load_settings():
         return dict(DEFAULT_SETTINGS)
 
 
+ALLOWED_KEYS = set(DEFAULT_SETTINGS.keys()) | {"theme"}
+
+
 def save_settings(values):
     path = settings_path()
     current = load_settings()
-    current.update(values)
-    path.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Whitelist allowed keys to prevent arbitrary payload injection/corruption
+    sanitized = {k: v for k, v in values.items() if k in ALLOWED_KEYS}
+    current.update(sanitized)
+    
+    # Atomic write to prevent settings file corruption during abrupt shutdowns
+    temp_path = path.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_path.replace(path)

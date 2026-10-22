@@ -1169,7 +1169,7 @@ class BillingScreen(QWidget):
         elif clicked == fld_btn:
             if self._receipt_img_path:
                 import subprocess
-                subprocess.Popen(f'explorer /select,"{self._receipt_img_path}"')
+                subprocess.Popen(["explorer", f"/select,{self._receipt_img_path}"])
 
         self.reload_data()
         self.search.setFocus()

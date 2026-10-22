@@ -82,6 +82,46 @@ class _AddUserDialog(QDialog):
         self.accept()
 
 
+class _ChangePinDialog(QDialog):
+    def __init__(self, user_name: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Change PIN — {user_name}")
+        self.setMinimumWidth(350)
+        layout = QVBoxLayout(self)
+
+        info = QLabel(f"Set a new 4–8 digit PIN for <b>{user_name}</b>:")
+        info.setStyleSheet("font-size: 13px; color: #1e293b; padding: 4px 0;")
+        layout.addWidget(info)
+
+        form = QFormLayout()
+        self.pin = QLineEdit()
+        self.pin.setEchoMode(QLineEdit.EchoMode.Password)
+        self.pin.setMaxLength(8)
+        self.pin.setPlaceholderText("New PIN (4–8 digits)")
+        self.confirm = QLineEdit()
+        self.confirm.setEchoMode(QLineEdit.EchoMode.Password)
+        self.confirm.setMaxLength(8)
+        self.confirm.setPlaceholderText("Confirm New PIN")
+        form.addRow("New PIN *", self.pin)
+        form.addRow("Confirm PIN *", self.confirm)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Save)
+        buttons.accepted.connect(self._validate)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _validate(self):
+        pin = self.pin.text()
+        if not pin.isdigit() or not 4 <= len(pin) <= 8:
+            QMessageBox.warning(self, "Invalid PIN", "PIN must contain 4 to 8 numeric digits.")
+            return
+        if pin != self.confirm.text():
+            QMessageBox.warning(self, "PIN Mismatch", "PIN and confirmation do not match.")
+            return
+        self.accept()
+
+
 class AdminSettingsPage(QWidget):
     operation_done = Signal(object, object)
     operation_failed = Signal(object)
@@ -327,15 +367,47 @@ class AdminSettingsPage(QWidget):
             self.users_table.setItem(row, 0, QTableWidgetItem(u["name"]))
             self.users_table.setItem(row, 1, QTableWidgetItem(u["role"].title()))
 
+            actions_widget = QWidget()
+            actions_lay = QHBoxLayout(actions_widget)
+            actions_lay.setContentsMargins(4, 2, 4, 2)
+            actions_lay.setSpacing(6)
+
+            pin_btn = QPushButton("🔑 Change PIN")
+            pin_btn.setProperty("compact", True)
+            pin_btn.setStyleSheet(
+                "min-height: 24px; max-height: 28px; padding: 2px 8px; color: #0284c7; "
+                "border: 1px solid #bae6fd; background: #f0f9ff; border-radius: 4px; "
+                "font-size: 11px; font-weight: 600;"
+            )
+            pin_btn.clicked.connect(lambda _=False, user_info=u: self._change_pin(user_info))
+            actions_lay.addWidget(pin_btn)
+
             del_btn = QPushButton("Delete")
             del_btn.setProperty("compact", True)
             del_btn.setStyleSheet(
-                "min-height: 24px; max-height: 28px; padding: 2px 10px; color: #DC2626; "
+                "min-height: 24px; max-height: 28px; padding: 2px 8px; color: #DC2626; "
                 "border: 1px solid #FCA5A5; background: #FEF2F2; border-radius: 4px; "
-                "font-size: 12px; font-weight: 600;"
+                "font-size: 11px; font-weight: 600;"
             )
             del_btn.clicked.connect(lambda _=False, uid=u["id"]: self._delete_user(uid))
-            self.users_table.setCellWidget(row, 2, del_btn)
+            actions_lay.addWidget(del_btn)
+
+            self.users_table.setCellWidget(row, 2, actions_widget)
+
+    def _change_pin(self, user_info):
+        dialog = _ChangePinDialog(user_info["name"], parent=self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            new_pin = dialog.pin.text()
+            self._run(
+                lambda: db.update_user_pin(user_info["id"], new_pin),
+                lambda _: (
+                    play_success_ding(),
+                    QMessageBox.information(
+                        self, "PIN Changed", f"PIN for {user_info['name']} was updated successfully."
+                    ),
+                    self._load_users()
+                )
+            )
 
     def _add_user(self):
         dialog = _AddUserDialog(self)

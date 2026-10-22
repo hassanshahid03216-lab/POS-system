@@ -1,5 +1,12 @@
-﻿.venv312/
+.venv*/
+venv/
 __pycache__/
+*.pyc
 *.db
 *.csv
+!sample_products_template.csv
 .crush/
+build/
+dist/
+.vscode/
+.idea/

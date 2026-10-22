@@ -20,8 +20,12 @@ else:
 
 
 def get_connection():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
+    # Enable WAL for better concurrent read/write performance
+    conn.execute("PRAGMA journal_mode=WAL")
+    # Enforce foreign key constraints (SQLite ignores them by default)
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
@@ -205,6 +209,12 @@ def init_db():
     item_cols = {row[1] for row in cur.execute("PRAGMA table_info(sale_items)")}
     if "discount" not in item_cols:
         cur.execute("ALTER TABLE sale_items ADD COLUMN discount REAL NOT NULL DEFAULT 0")
+
+    # Seed default Admin account (PIN: 1234) if no users exist
+    user_cnt = cur.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    if user_cnt == 0:
+        default_hash = hash_pin("1234")
+        cur.execute("INSERT INTO users (name, role, pin_hash) VALUES (?, ?, ?)", ("Admin", "admin", default_hash))
 
     conn.commit()
     conn.close()
@@ -449,8 +459,9 @@ def process_sale_return(sale_id, returned_items, notes="", refund_method="Cash",
             if net_before_bill_discount:
                 sale_line_refund -= bill_discount * sold["net"] / net_before_bill_discount
             refund_remaining = max(0.0, sale_line_refund - float(already["refunded"]))
-            item["refund_amount"] = refund_remaining * qty / remaining_qty
-            item["unit_price"] = item["refund_amount"] / qty
+            # Guard against zero-division if remaining_qty is 0 due to concurrent updates
+            item["refund_amount"] = refund_remaining * qty / max(1, remaining_qty)
+            item["unit_price"] = item["refund_amount"] / max(1, qty)
         
         for item in returned_items:
             qty = int(item["qty"])
@@ -567,6 +578,12 @@ def update_customer(customer_id, name, phone="", address=""):
 def delete_customer(customer_id):
     conn = get_connection()
     try:
+        row = conn.execute("SELECT balance FROM customers WHERE id = ?", (customer_id,)).fetchone()
+        if row and abs(float(row["balance"])) > 0.005:
+            raise ValueError(
+                f"Customer has a balance of Rs {float(row['balance']):,.2f}. "
+                "Clear the balance before deleting this customer."
+            )
         conn.execute("DELETE FROM customers WHERE id = ?", (customer_id,))
         conn.commit()
     finally:
@@ -769,6 +786,24 @@ def update_product(pid, name, barcode, cost_price, sale_price, stock_qty, catego
 def delete_product(pid):
     conn = get_connection()
     try:
+        # Block deletion if the product has sales history — would orphan sale_items records
+        sales_count = conn.execute(
+            "SELECT COUNT(*) FROM sale_items WHERE product_id = ?", (pid,)
+        ).fetchone()[0]
+        if sales_count > 0:
+            raise ValueError(
+                f"This product has {sales_count} sale record(s) and cannot be deleted. "
+                "To hide it from sales, set its stock to 0 instead."
+            )
+        # Also block if product has purchase history
+        purchase_count = conn.execute(
+            "SELECT COUNT(*) FROM purchase_items WHERE product_id = ?", (pid,)
+        ).fetchone()[0]
+        if purchase_count > 0:
+            raise ValueError(
+                f"This product has {purchase_count} purchase record(s) and cannot be deleted. "
+                "Set stock to 0 to retire it."
+            )
         conn.execute("DELETE FROM products WHERE id = ?", (pid,))
         conn.commit()
     finally:
@@ -824,6 +859,14 @@ def import_products_csv(file_path):
     updated = 0
     skipped = 0
     conn = get_connection()
+
+    # Guard against extremely large files that could exhaust memory
+    try:
+        file_size = os.path.getsize(file_path)
+    except OSError as e:
+        raise ValueError(f"Cannot access CSV file: {e}")
+    if file_size > 10 * 1024 * 1024:  # 10 MB limit
+        raise ValueError(f"CSV file is too large ({file_size // 1024 // 1024} MB). Maximum allowed size is 10 MB.")
 
     # Detect encoding
     raw_bytes = open(file_path, "rb").read()
@@ -944,8 +987,8 @@ def hash_pin(pin):
     if not pin.isdigit() or not 4 <= len(pin) <= 8:
         raise ValueError("PIN must contain 4 to 8 digits.")
     salt = secrets.token_hex(16)
-    digest = hashlib.sha256((salt + pin).encode("utf-8")).hexdigest()
-    return f"sha256${salt}${digest}"
+    digest = hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"), salt.encode("utf-8"), 600_000).hex()
+    return f"pbkdf2${salt}${digest}"
 
 
 def authenticate_pin(pin):
@@ -956,15 +999,23 @@ def authenticate_pin(pin):
         rows = conn.execute("SELECT id, name, role, pin_hash FROM users").fetchall()
         for row in rows:
             encoded = row["pin_hash"]
-            if encoded.startswith("sha256$"):
+            if encoded.startswith("pbkdf2$"):
+                # New PBKDF2-HMAC-SHA256 format
+                try:
+                    _, salt, expected = encoded.split("$", 2)
+                except ValueError:
+                    continue
+                actual = hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"), salt.encode("utf-8"), 600_000).hex()
+            elif encoded.startswith("sha256$"):
+                # Legacy salted SHA-256 — still accepted for existing users
                 try:
                     _, salt, expected = encoded.split("$", 2)
                 except ValueError:
                     continue
                 actual = hashlib.sha256((salt + pin).encode("utf-8")).hexdigest()
             else:
-                actual = hashlib.sha256(pin.encode("utf-8")).hexdigest()
-                expected = encoded
+                # Raw unsalted hash — reject; account must be recreated
+                continue
             if hmac.compare_digest(actual, expected):
                 return {"id": row["id"], "name": row["name"], "role": row["role"]}
         return None
@@ -991,13 +1042,18 @@ def create_user_with_pin(name, role, pin):
         conn.execute("BEGIN IMMEDIATE")
         for row in conn.execute("SELECT pin_hash FROM users").fetchall():
             encoded = row["pin_hash"]
-            if encoded.startswith("sha256$"):
+            if encoded.startswith("pbkdf2$"):
+                parts = encoded.split("$", 2)
+                if len(parts) == 3 and hmac.compare_digest(
+                        hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"), parts[1].encode("utf-8"), 600_000).hex(),
+                        parts[2]):
+                    raise ValueError("That PIN is already assigned. Choose a different PIN.")
+            elif encoded.startswith("sha256$"):
                 parts = encoded.split("$", 2)
                 if len(parts) == 3 and hmac.compare_digest(
                         hashlib.sha256((parts[1] + pin).encode("utf-8")).hexdigest(), parts[2]):
                     raise ValueError("That PIN is already assigned. Choose a different PIN.")
-            elif hmac.compare_digest(hashlib.sha256(pin.encode("utf-8")).hexdigest(), encoded):
-                raise ValueError("That PIN is already assigned. Choose a different PIN.")
+            # Raw/unsalted hashes are not checked — they are invalid accounts
         cursor = conn.execute("INSERT INTO users (name, role, pin_hash) VALUES (?, ?, ?)",
                               (name.strip(), role, pin_hash))
         conn.commit()
@@ -1023,6 +1079,38 @@ def delete_user(uid):
     try:
         conn.execute("DELETE FROM users WHERE id = ?", (uid,))
         conn.commit()
+    finally:
+        conn.close()
+
+
+def update_user_pin(user_id, new_pin):
+    """Update a user's PIN with PBKDF2 hashing and uniqueness validation."""
+    if not new_pin.isdigit() or not 4 <= len(new_pin) <= 8:
+        raise ValueError("PIN must contain 4 to 8 digits.")
+    pin_hash = hash_pin(new_pin)
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        for row in conn.execute("SELECT id, pin_hash FROM users WHERE id != ?", (user_id,)).fetchall():
+            encoded = row["pin_hash"]
+            if encoded.startswith("pbkdf2$"):
+                parts = encoded.split("$", 2)
+                if len(parts) == 3 and hmac.compare_digest(
+                        hashlib.pbkdf2_hmac("sha256", new_pin.encode("utf-8"), parts[1].encode("utf-8"), 600_000).hex(),
+                        parts[2]):
+                    raise ValueError("That PIN is already assigned to another user.")
+            elif encoded.startswith("sha256$"):
+                parts = encoded.split("$", 2)
+                if len(parts) == 3 and hmac.compare_digest(
+                        hashlib.sha256((parts[1] + new_pin).encode("utf-8")).hexdigest(), parts[2]):
+                    raise ValueError("That PIN is already assigned to another user.")
+        changed = conn.execute("UPDATE users SET pin_hash = ? WHERE id = ?", (pin_hash, user_id)).rowcount
+        if changed != 1:
+            raise ValueError("User not found.")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -1174,7 +1262,11 @@ def record_purchase(supplier_id, invoice_no, items, paid_amount=0, payment_metho
         purchase_id = cur.lastrowid
         for pid,qty,cost in prepared:
             conn.execute("INSERT INTO purchase_items (purchase_id,product_id,qty,unit_cost) VALUES (?,?,?,?)", (purchase_id,pid,qty,cost))
-            conn.execute("UPDATE products SET stock_qty=stock_qty+?,cost_price=? WHERE id=?", (qty,cost,pid))
+            # Only update cost_price if the incoming cost is positive — avoids wiping historical cost
+            if cost > 0:
+                conn.execute("UPDATE products SET stock_qty=stock_qty+?,cost_price=? WHERE id=?", (qty,cost,pid))
+            else:
+                conn.execute("UPDATE products SET stock_qty=stock_qty+? WHERE id=?", (qty,pid))
             conn.execute("INSERT INTO stock_movements (product_id,type,qty,timestamp) VALUES (?,'restock',?,?)", (pid,qty,now))
         due = total-paid
         conn.execute("UPDATE suppliers SET balance_owed=balance_owed+? WHERE id=?", (due,supplier_id))

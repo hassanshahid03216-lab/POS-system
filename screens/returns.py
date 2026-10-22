@@ -473,7 +473,7 @@ class SaleReturnsScreen(QWidget):
             elif clicked == fld_btn:
                 if getattr(self, "_receipt_img_path", None):
                     import subprocess
-                    subprocess.Popen(f'explorer /select,"{self._receipt_img_path}"')
+                    subprocess.Popen(["explorer", f"/select,{self._receipt_img_path}"])
                 else:
                     self.status.setText("Receipt image not available.")
 

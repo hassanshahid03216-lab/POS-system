@@ -53,6 +53,11 @@ class LoginScreen(QWidget):
         super().__init__(parent)
         self.pool = QThreadPool.globalInstance()
         self.busy = False
+        self._failed_attempts = 0
+        self._lockout_remaining = 0
+        self._lockout_timer = QTimer(self)
+        self._lockout_timer.setInterval(1000)
+        self._lockout_timer.timeout.connect(self._lockout_tick)
         self.operation_done.connect(self._finished)
         self.operation_failed.connect(self._failed)
         self._buttons = []
@@ -191,6 +196,10 @@ class LoginScreen(QWidget):
         self.pin.setFocus()
 
     def _login(self):
+        if self._lockout_remaining > 0:
+            play_error_beep()
+            self.status.setText(f"Too many failed attempts. Try again in {self._lockout_remaining}s.")
+            return
         pin = self.pin.text()
         if not pin.isdigit() or not 4 <= len(pin) <= 8:
             play_error_beep()
@@ -202,6 +211,7 @@ class LoginScreen(QWidget):
         self.status.setText("Signing in…")
         for button in self._buttons:
             button.setEnabled(False)
+        self.pin.setEnabled(False)
         worker = _Worker(lambda: db.authenticate_pin(pin))
         worker.signals.done.connect(lambda user: self.operation_done.emit(self._auth_result, user))
         worker.signals.failed.connect(self.operation_failed.emit)
@@ -210,21 +220,50 @@ class LoginScreen(QWidget):
 
     def _finished(self, callback, value):
         self.busy = False
-        for button in self._buttons:
-            button.setEnabled(True)
+        if self._lockout_remaining <= 0:
+            for button in self._buttons:
+                button.setEnabled(True)
+            self.pin.setEnabled(True)
         callback(value)
 
     def _auth_result(self, user):
         if not user:
+            self._failed_attempts += 1
             play_error_beep()
             self.pin.clear()
-            self.pin.setFocus()
-            self.status.setText("PIN not recognized. Please try again.")
+            if self._failed_attempts >= 5:
+                self._lockout_remaining = 30
+                self._lockout_timer.start()
+                self.pin.setEnabled(False)
+                for button in self._buttons:
+                    button.setEnabled(False)
+                self.status.setText(f"Too many failed attempts. Locked for 30s.")
+            else:
+                remaining = 5 - self._failed_attempts
+                self.pin.setFocus()
+                self.status.setText(f"PIN not recognized. {remaining} attempt(s) remaining.")
             return
+        # Success: reset lockout counters
+        self._failed_attempts = 0
+        self._lockout_remaining = 0
+        self._lockout_timer.stop()
         play_success_ding()
         self.pin.clear()
         self.status.clear()
         self.authenticated.emit(user)
+
+    def _lockout_tick(self):
+        self._lockout_remaining -= 1
+        if self._lockout_remaining <= 0:
+            self._lockout_timer.stop()
+            self._failed_attempts = 0
+            self.pin.setEnabled(True)
+            for button in self._buttons:
+                button.setEnabled(True)
+            self.status.setText("Lockout expired. Please enter your PIN.")
+            self.pin.setFocus()
+        else:
+            self.status.setText(f"Too many failed attempts. Locked for {self._lockout_remaining}s.")
 
     def _failed(self, error):
         self.busy = False
