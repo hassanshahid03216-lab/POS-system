@@ -671,8 +671,64 @@ def get_dashboard_insights(period="week"):
             FROM sale_items si JOIN sales s ON s.id = si.sale_id
             JOIN products p ON p.id = si.product_id
             WHERE s.timestamp >= ? AND s.timestamp <= ?
-            GROUP BY p.id, p.name ORDER BY quantity DESC, p.name LIMIT 5
+            GROUP BY p.id, p.name ORDER BY quantity DESC, p.name LIMIT 8
         """, (period_start, now_text)).fetchall()]
+
+        # Daily revenue & profit trend
+        daily_rows = conn.execute("""
+            SELECT date(s.timestamp) AS day,
+                   COALESCE(SUM(s.total), 0) AS revenue,
+                   COALESCE(SUM(s.total - COALESCE(c.cost, 0)), 0) AS profit,
+                   COUNT(s.id) AS orders
+            FROM sales s
+            LEFT JOIN (SELECT si.sale_id, SUM(si.qty * p.cost_price) AS cost
+                       FROM sale_items si JOIN products p ON p.id = si.product_id
+                       GROUP BY si.sale_id) c ON c.sale_id = s.id
+            WHERE s.timestamp >= ? AND s.timestamp <= ?
+            GROUP BY date(s.timestamp)
+            ORDER BY day ASC
+        """, (period_start, now_text)).fetchall()
+        daily_trend = [dict(r) for r in daily_rows]
+
+        # Payment methods distribution
+        pay_rows = conn.execute("""
+            SELECT COALESCE(payment_mode, 'Cash') AS mode,
+                   COUNT(*) AS count,
+                   COALESCE(SUM(total), 0) AS total_amount
+            FROM sales
+            WHERE timestamp >= ? AND timestamp <= ?
+            GROUP BY payment_mode
+            ORDER BY total_amount DESC
+        """, (period_start, now_text)).fetchall()
+        payment_breakdown = [dict(r) for r in pay_rows]
+
+        # Category sales breakdown
+        cat_rows = conn.execute("""
+            SELECT COALESCE(NULLIF(p.category, ''), 'General') AS category,
+                   SUM(si.qty) AS quantity,
+                   COALESCE(SUM(si.qty * si.unit_price), 0) AS revenue
+            FROM sale_items si
+            JOIN sales s ON s.id = si.sale_id
+            JOIN products p ON p.id = si.product_id
+            WHERE s.timestamp >= ? AND s.timestamp <= ?
+            GROUP BY p.category
+            ORDER BY revenue DESC LIMIT 8
+        """, (period_start, now_text)).fetchall()
+        category_sales = [dict(r) for r in cat_rows]
+
+        # Period statistics
+        period_stats = conn.execute("""
+            SELECT COUNT(DISTINCT s.id) AS total_orders,
+                   COALESCE(SUM(s.total), 0) AS total_revenue,
+                   COALESCE(SUM(si.qty), 0) AS total_units_sold
+            FROM sales s
+            LEFT JOIN sale_items si ON si.sale_id = s.id
+            WHERE s.timestamp >= ? AND s.timestamp <= ?
+        """, (period_start, now_text)).fetchone()
+
+        total_orders = period_stats["total_orders"] or 0
+        total_rev = period_stats["total_revenue"] or 0
+        avg_order_value = (total_rev / total_orders) if total_orders > 0 else 0.0
 
         restock_needed = [dict(row) for row in conn.execute("""
             SELECT p.id, p.name, p.stock_qty, p.low_stock_threshold, p.cost_price,
@@ -709,6 +765,12 @@ def get_dashboard_insights(period="week"):
         return {
             "summary": dict(summary),
             "top_products": top,
+            "daily_trend": daily_trend,
+            "payment_breakdown": payment_breakdown,
+            "category_sales": category_sales,
+            "total_orders": total_orders,
+            "avg_order_value": avg_order_value,
+            "total_units_sold": period_stats["total_units_sold"] or 0,
             "slow_products": slow,
             "restock_needed": restock_needed,
             "hourly_sales": {int(row["hour"]): int(row["sales"]) for row in hourly if row["hour"] is not None},

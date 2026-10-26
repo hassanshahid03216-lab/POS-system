@@ -141,6 +141,7 @@ A secondary, browser-based interface over the same database/services:
 ### Tech Stack Reference
 | Layer | Choice |
 |---|---|
+
 | Desktop UI | PySide6 (Qt) |
 | Local web UI | Flask + Jinja templates |
 | Database | SQLite (`sqlite3`, raw SQL) |
