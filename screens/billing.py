@@ -427,9 +427,11 @@ class BillingScreen(QWidget):
         disc_lbl.setStyleSheet("font-weight: 600; color: #475569;")
         summary_row.addWidget(disc_lbl)
         self.bill_discount = QDoubleSpinBox()
-        self.bill_discount.setRange(0, 99_999_999)
+        self.bill_discount.setRange(0, 100)
+        self.bill_discount.setSingleStep(5)
         self.bill_discount.setDecimals(2)
-        self.bill_discount.setPrefix("Rs ")
+        self.bill_discount.setSuffix(" %")
+        self.bill_discount.installEventFilter(self)
         self.bill_discount.valueChanged.connect(self._update_totals)
         summary_row.addWidget(self.bill_discount)
 
@@ -887,6 +889,9 @@ class BillingScreen(QWidget):
                     return True
                 if obj == self.table and event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
                     if self.cart:
+                        if event.key() == Qt.Key.Key_Down and column == 0 and row == len(self.cart) - 1:
+                            self.bill_discount.setFocus()
+                            return True
                         delta = -1 if event.key() == Qt.Key.Key_Up else 1
                         self._focus_cart_cell(max(0, min(len(self.cart) - 1, row + delta)), column)
                     return True
@@ -901,6 +906,18 @@ class BillingScreen(QWidget):
                         self._focus_cart_cell(min(widget_row, len(self.cart) - 1), 0)
                     else:
                         self.search.setFocus()
+                    return True
+            elif obj == self.bill_discount:
+                if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_F1):
+                    self.search.setFocus()
+                    return True
+                if event.key() == Qt.Key.Key_Left:
+                    if self.cart:
+                        self._focus_cart_cell(len(self.cart) - 1, 0)
+                    else:
+                        self.search.setFocus()
+                    return True
+                if event.key() == Qt.Key.Key_Right:
                     return True
             # ── 1. Search Bar Key Handling ──────────────────────────────────
             if obj == self.search:
@@ -980,11 +997,7 @@ class BillingScreen(QWidget):
     def _update_totals(self, *_):
         subtotal = sum(item["qty"] * item["unit_price"] for item in self.cart)
         item_discount = sum(item["discount"] for item in self.cart)
-        bill_discount = min(self.bill_discount.value(), max(0, subtotal - item_discount))
-        if bill_discount != self.bill_discount.value():
-            self.bill_discount.blockSignals(True)
-            self.bill_discount.setValue(bill_discount)
-            self.bill_discount.blockSignals(False)
+        bill_discount = round(max(0, subtotal - item_discount) * self.bill_discount.value() / 100, 2)
         self.subtotal_label.setText(f"Subtotal: Rs {subtotal:,.2f}")
         self.discount_label.setText(f"Discount: Rs {item_discount + bill_discount:,.2f}")
         total_before_voucher = max(0.0, subtotal - item_discount - bill_discount)
@@ -1019,7 +1032,7 @@ class BillingScreen(QWidget):
             return
         payload = {
             "items": [{k: item[k] for k in ("id", "name", "barcode", "qty", "unit_price", "discount")} for item in self.cart],
-            "bill_discount": self.bill_discount.value(),
+            "bill_discount_percent": self.bill_discount.value(),
         }
         self.status.setText("Saving held bill…")
         self._run(lambda: db.save_held_bill(payload, self.held_bill_id), self._held)
@@ -1059,7 +1072,14 @@ class BillingScreen(QWidget):
             product = next((p for p in self.products if p["id"] == old["id"]), None)
             if product:
                 self.cart.append({**old, "stock_qty": int(product.get("stock_qty") or 0)})
-        self.bill_discount.setValue(float(payload.get("bill_discount", 0)))
+        if "bill_discount_percent" in payload:
+            self.bill_discount.setValue(float(payload.get("bill_discount_percent", 0)))
+        else:
+            subtotal = sum(item["qty"] * item["unit_price"] for item in self.cart)
+            item_discount = sum(item["discount"] for item in self.cart)
+            remaining = max(0, subtotal - item_discount)
+            old_bill_discount = float(payload.get("bill_discount", 0))
+            self.bill_discount.setValue(old_bill_discount / remaining * 100 if remaining else 0)
         self._render_cart()
         self.status.setText("Held bill resumed.")
         self.search.setFocus()
@@ -1091,7 +1111,8 @@ class BillingScreen(QWidget):
 
         subtotal = sum(item["qty"] * item["unit_price"] for item in self.cart)
         item_discount = sum(item["discount"] for item in self.cart)
-        total_before_voucher = max(0.0, subtotal - item_discount - self.bill_discount.value())
+        bill_discount = round(max(0, subtotal - item_discount) * self.bill_discount.value() / 100, 2)
+        total_before_voucher = max(0.0, subtotal - item_discount - bill_discount)
         exchange_credit = min(self.pending_exchange_credit, total_before_voucher)
         total_due = total_before_voucher - exchange_credit
 
@@ -1107,8 +1128,6 @@ class BillingScreen(QWidget):
         change = dialog.change_amount
 
         items_payload = [{k: item[k] for k in ("id", "name", "barcode", "qty", "unit_price", "discount")} for item in self.cart]
-        bill_discount = self.bill_discount.value()
-
         receipt_data = {
             "items": items_payload,
             "subtotal": subtotal,
