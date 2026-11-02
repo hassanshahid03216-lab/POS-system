@@ -85,10 +85,12 @@ class _PaymentDialog(QDialog):
 
         form = QFormLayout()
         self.amount = QDoubleSpinBox()
-        self.amount.setRange(1, 999_999_999)
+        self.amount.setRange(0.01, 999_999_999)
         self.amount.setDecimals(2)
         self.amount.setPrefix("Rs ")
-        self.amount.setValue(max(1.0, float(customer.get("balance", 0))))
+        balance_due = max(0.01, float(customer.get("balance", 0)))
+        self.amount.setMaximum(balance_due)
+        self.amount.setValue(balance_due)
         self.notes = QLineEdit("Cash payment received")
         self.method = QComboBox()
         self.method.addItems(["Cash", "Bank transfer"])
@@ -120,6 +122,7 @@ class CustomerKhataScreen(QWidget):
         self.pool = QThreadPool.globalInstance()
         self.customers: list[dict] = []
         self.selected_customer: dict | None = None
+        self.pending_customer_id: int | None = None
         self.busy = False
 
         self.operation_done.connect(self._finished)
@@ -297,26 +300,26 @@ class CustomerKhataScreen(QWidget):
 
     def _customers_loaded(self, customers):
         self.customers = customers
-        # Only show customers with non-zero khata balance (cleared ones are hidden)
-        active_khata = [c for c in customers if float(c.get("balance", 0)) != 0]
-        self._render_customers(active_khata)
-        if self.selected_customer:
-            updated = next((c for c in active_khata if c["id"] == self.selected_customer["id"]), None)
-            if updated:
-                self.selected_customer = updated
-                self._load_ledger(updated)
-            else:
-                self._reset_ledger()
+        self._render_customers(customers)
+        target_id = self.pending_customer_id
+        if target_id is None and self.selected_customer:
+            target_id = self.selected_customer["id"]
+        self.pending_customer_id = None
+        updated = next((c for c in customers if c["id"] == target_id), None)
+        if updated:
+            self._select_customer_by_id(updated["id"])
+            self.selected_customer = updated
+            self._load_ledger(updated)
+        elif self.selected_customer:
+            self._reset_ledger()
 
     def _filter_customers(self, text):
         query = text.strip().casefold()
-        # Always filter out zero-balance customers from khata view
-        active = [c for c in self.customers if float(c.get("balance", 0)) != 0]
         if not query:
-            self._render_customers(active)
+            self._render_customers(self.customers)
             return
         filtered = [
-            c for c in active
+            c for c in self.customers
             if query in c["name"].casefold() or query in (c.get("phone") or "").casefold()
         ]
         self._render_customers(filtered)
@@ -382,7 +385,7 @@ class CustomerKhataScreen(QWidget):
                 "font-size: 20px; font-weight: 800; color: #16A34A; background: #F0FDF4; "
                 "border: 1px solid #86EFAC; border-radius: 8px; padding: 10px 14px;"
             )
-        self.pay_btn.setEnabled(True)
+        self.pay_btn.setEnabled(bal > 0.005)
         self.edit_btn.setEnabled(True)
         self.delete_btn.setEnabled(True)
 
@@ -416,7 +419,12 @@ class CustomerKhataScreen(QWidget):
             name = dialog.name.text().strip()
             phone = dialog.phone.text().strip()
             addr = dialog.address.text().strip()
-            self._run(lambda: db.create_customer(name, phone, addr), lambda _: self.refresh())
+            self._run(lambda: db.create_customer(name, phone, addr), self._customer_created)
+
+    def _customer_created(self, customer_id):
+        self.pending_customer_id = customer_id
+        self.status.setText("Customer added.")
+        self.refresh()
 
     def _edit_customer(self):
         if not self.selected_customer:

@@ -618,6 +618,14 @@ def record_customer_payment(customer_id, amount, notes="Payment received", payme
     conn = get_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
+        customer = conn.execute("SELECT balance FROM customers WHERE id = ?", (customer_id,)).fetchone()
+        if not customer:
+            raise ValueError("Customer record not found.")
+        balance_due = float(customer["balance"] or 0)
+        if balance_due <= 0.005:
+            raise ValueError("This customer has no outstanding balance to pay.")
+        if amount > balance_due + 0.0000001:
+            raise ValueError(f"Payment cannot exceed the balance due of Rs {balance_due:,.2f}.")
         timestamp = datetime.now().isoformat(timespec="seconds")
         conn.execute("UPDATE customers SET balance = balance - ? WHERE id = ?", (amount, customer_id))
         cur = conn.execute(
