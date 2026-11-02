@@ -192,6 +192,21 @@ QDoubleSpinBox:disabled, QDateEdit:disabled, QComboBox:disabled {
     color: %(disabled_text)s;
 }
 
+QComboBox QAbstractItemView {
+    background-color: %(surface)s;
+    color: %(text_primary)s;
+    border: 1px solid %(border)s;
+    border-radius: 6px;
+    padding: 4px;
+    selection-background-color: %(primary)s;
+    selection-color: #FFFFFF;
+    outline: none;
+}
+QComboBox QAbstractItemView::item {
+    min-height: 28px;
+    padding: 4px 8px;
+}
+
 QGroupBox {
     background-color: %(surface)s;
     border: 1px solid %(border)s;

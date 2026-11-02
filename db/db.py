@@ -1295,6 +1295,58 @@ def close_cash_shift(shift_id, actual, notes=""):
         conn.close()
 
 
+def list_today_cash_closings():
+    now_date = datetime.now().strftime("%Y-%m-%d")
+    conn = get_connection()
+    try:
+        rows = conn.execute("""
+            SELECT * FROM cash_closings
+            WHERE date(timestamp) = ?
+            ORDER BY id DESC
+        """, (now_date,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_day_end_summary():
+    now_date = datetime.now().strftime("%Y-%m-%d")
+    conn = get_connection()
+    try:
+        sales = conn.execute("""
+            SELECT
+                COALESCE(SUM(CASE WHEN payment_mode='Cash' THEN total-exchange_credit ELSE 0 END), 0) AS total_cash,
+                COALESCE(SUM(CASE WHEN payment_mode!='Cash' THEN total-exchange_credit ELSE 0 END), 0) AS total_digital,
+                COALESCE(SUM(total), 0) AS total_revenue,
+                COUNT(id) AS bill_count
+            FROM sales WHERE date(timestamp) = ?
+        """, (now_date,)).fetchone()
+
+        closings = conn.execute("""
+            SELECT
+                COUNT(id) AS shift_count,
+                COALESCE(SUM(discrepancy), 0) AS total_discrepancy,
+                COALESCE(SUM(actual), 0) AS total_counted
+            FROM cash_closings WHERE date(timestamp) = ?
+        """, (now_date,)).fetchone()
+
+        active = conn.execute("SELECT * FROM cash_shifts WHERE closed_at IS NULL ORDER BY id DESC LIMIT 1").fetchone()
+
+        return {
+            "date": now_date,
+            "total_cash": float(sales["total_cash"]),
+            "total_digital": float(sales["total_digital"]),
+            "total_revenue": float(sales["total_revenue"]),
+            "bill_count": int(sales["bill_count"]),
+            "shift_count": int(closings["shift_count"]),
+            "total_discrepancy": float(closings["total_discrepancy"]),
+            "has_active_shift": active is not None,
+            "active_shift": dict(active) if active else None,
+        }
+    finally:
+        conn.close()
+
+
 def list_suppliers():
     conn = get_connection()
     try:
@@ -1403,13 +1455,13 @@ def record_supplier_payment(supplier_id, amount, method="Cash", notes=""):
             allocations.append((purchase["id"],applied))
             remaining -= applied
         if remaining > 0.005:
-            raise ValueError("The supplier balance does not match its outstanding purchase invoices.")
-        conn.execute("UPDATE suppliers SET balance_owed=balance_owed-? WHERE id=?", (amount,supplier_id))
+            allocations.append((None, remaining))
+        conn.execute("UPDATE suppliers SET balance_owed=MAX(0.0, balance_owed-?) WHERE id=?", (amount,supplier_id))
         for purchase_id, applied in allocations:
             conn.execute("INSERT INTO supplier_transactions (supplier_id,purchase_id,type,amount,notes,timestamp) VALUES (?,?,'payment',?,?,?)",
-                         (supplier_id,purchase_id,applied,f"{method}: {notes}".strip(),now))
+                         (supplier_id,purchase_id,applied,f"{method}: {notes}".strip() if notes else f"Payment ({method})",now))
         if method == "Cash":
-            conn.execute("INSERT INTO cash_expenses (amount,notes,timestamp) VALUES (?,?,?)", (amount,f"Supplier payment: {notes}".strip(),now))
+            conn.execute("INSERT INTO cash_expenses (amount,notes,timestamp) VALUES (?,?,?)", (amount,f"Supplier payment: {notes}".strip() if notes else f"Payment to supplier #{supplier_id}",now))
         conn.commit()
     except Exception:
         conn.rollback()
