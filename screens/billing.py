@@ -722,6 +722,7 @@ class BillingScreen(QWidget):
             qty.setFont(QFont("Segoe UI", 12, QFont.Weight.DemiBold))
             qty.setFixedSize(82, 30)
             qty.setStyleSheet("min-height:30px; max-height:30px; padding:1px 4px; font-size:12px;")
+            qty.installEventFilter(self)
             qty.valueChanged.connect(lambda value, pid=entry["id"]: self._set_qty(pid, value))
             self.table.setCellWidget(row, 1, qty)
 
@@ -737,6 +738,7 @@ class BillingScreen(QWidget):
             discount.setFont(QFont("Segoe UI", 12))
             discount.setFixedSize(126, 30)
             discount.setStyleSheet("min-height:30px; max-height:30px; padding:1px 4px; font-size:12px;")
+            discount.installEventFilter(self)
             discount.valueChanged.connect(lambda value, pid=entry["id"]: self._set_item_discount(pid, value))
             self.table.setCellWidget(row, 3, discount)
 
@@ -748,6 +750,7 @@ class BillingScreen(QWidget):
             remove.setProperty("compact", True)
             remove.setProperty('variant', 'danger')
             remove.setFixedSize(30, 30)
+            remove.installEventFilter(self)
             remove.setToolTip("Remove item from bill")
             remove.clicked.connect(lambda _=False, pid=entry["id"]: self._remove_item(pid))
             self.table.setCellWidget(row, 5, remove)
@@ -843,8 +846,62 @@ class BillingScreen(QWidget):
         self._render_cart()
         self.search.setFocus()
 
+    def _cart_focus_columns(self):
+        return (0, 1, 3, 5)
+
+    def _cart_widget_cell(self, widget):
+        for row in range(self.table.rowCount()):
+            for column in self._cart_focus_columns()[1:]:
+                if self.table.cellWidget(row, column) is widget:
+                    return row, column
+        return None, None
+
+    def _focus_cart_cell(self, row, column):
+        if not self.cart:
+            self.search.setFocus()
+            return
+        row = max(0, min(row, len(self.cart) - 1))
+        columns = self._cart_focus_columns()
+        if column not in columns:
+            column = columns[0]
+        self.table.setCurrentCell(row, column)
+        self.table.selectRow(row)
+        widget = self.table.cellWidget(row, column)
+        widget.setFocus() if widget else self.table.setFocus()
+
+    def _navigate_cart_focus(self, row, column, direction):
+        columns = self._cart_focus_columns()
+        index = columns.index(column) if column in columns else 0
+        next_index = index + direction
+        if 0 <= next_index < len(columns):
+            self._focus_cart_cell(row, columns[next_index])
+
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Type.KeyPress:
+            widget_row, widget_column = self._cart_widget_cell(obj)
+            if obj == self.table or widget_row is not None:
+                row = self.table.currentRow() if obj == self.table else widget_row
+                column = self.table.currentColumn() if obj == self.table else widget_column
+                if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_F1):
+                    self.search.setFocus()
+                    return True
+                if obj == self.table and event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+                    if self.cart:
+                        delta = -1 if event.key() == Qt.Key.Key_Up else 1
+                        self._focus_cart_cell(max(0, min(len(self.cart) - 1, row + delta)), column)
+                    return True
+                if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+                    self._navigate_cart_focus(row, column, -1 if event.key() == Qt.Key.Key_Left else 1)
+                    return True
+                if widget_column == 5 and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                    product_id = self.cart[widget_row]["id"]
+                    self.cart = [item for item in self.cart if item["id"] != product_id]
+                    self._render_cart(keep_row=min(widget_row, len(self.cart) - 1))
+                    if self.cart:
+                        self._focus_cart_cell(min(widget_row, len(self.cart) - 1), 0)
+                    else:
+                        self.search.setFocus()
+                    return True
             # ── 1. Search Bar Key Handling ──────────────────────────────────
             if obj == self.search:
                 if self.suggestions.isVisible() and self.suggestions.count() > 0:
@@ -905,10 +962,10 @@ class BillingScreen(QWidget):
 
             # ── 3. Cart Table Key Handling ──────────────────────────────────
             elif obj == self.table:
-                if event.key() in (Qt.Key.Key_Plus, Qt.Key.Key_Equal, Qt.Key.Key_Right) or event.text() == "+":
+                if event.key() in (Qt.Key.Key_Plus, Qt.Key.Key_Equal) or event.text() == "+":
                     self._adjust_qty_for_current_row(1)
                     return True
-                elif event.key() in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore, Qt.Key.Key_Left) or event.text() == "-":
+                elif event.key() in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore) or event.text() == "-":
                     self._adjust_qty_for_current_row(-1)
                     return True
                 elif event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):

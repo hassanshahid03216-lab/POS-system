@@ -1,0 +1,10 @@
+{% extends 'base.html' %}
+{% block title %}Error · ShopFlow POS{% endblock %}
+{% block content %}
+<section class="panel" style="max-width: 500px; margin: 3rem auto; text-align: center;">
+  <h2 style="color: var(--danger); margin-bottom: 1rem;">Notice</h2>
+  <p style="margin-bottom: 1.5rem; color: var(--text-muted);">{{ message }}</p>
+  <a href="{{ url_for('billing') }}" class="button primary">Back to Billing</a>
+</section>
+{% endblock %}
+

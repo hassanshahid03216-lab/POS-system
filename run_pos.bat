@@ -21,6 +21,16 @@ if exist "ShopFlowPOS.exe" (
 )
 
 :: Otherwise check Python virtual environment
+if exist ".venv\Scripts\pythonw.exe" (
+    start "" ".venv\Scripts\pythonw.exe" main.py
+    exit /b 0
+)
+
+if exist ".venv\Scripts\python.exe" (
+    start "" ".venv\Scripts\python.exe" main.py
+    exit /b 0
+)
+
 if exist ".venv312\Scripts\pythonw.exe" (
     start "" ".venv312\Scripts\pythonw.exe" main.py
     exit /b 0

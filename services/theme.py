@@ -225,6 +225,19 @@ QTableWidget, QTableView, QListWidget {
     selection-color: %(selection_text)s;
 }
 QTableWidget::item, QTableView::item { min-height: 34px; padding: 4px; }
+QTableWidget#billingCartTable::item { min-height: 0; padding: 2px 6px; }
+QSpinBox#cartQtySpinBox, QDoubleSpinBox#cartDiscountSpinBox {
+    min-height: 0;
+    max-height: 28px;
+    padding: 1px 4px;
+    font-size: 12px;
+}
+QTableWidget#billingCartTable QPushButton[compact="true"] {
+    min-height: 0;
+    max-height: 28px;
+    padding: 0 8px;
+    font-size: 12px;
+}
 QTableWidget::item:selected, QTableView::item:selected,
 QListWidget::item:selected {
     background-color: %(selection)s;
