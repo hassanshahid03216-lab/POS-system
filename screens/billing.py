@@ -404,6 +404,8 @@ class BillingScreen(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(42)
+        self.table.verticalHeader().setMinimumSectionSize(42)
         self.table.installEventFilter(self)
         header_view = self.table.horizontalHeader()
         header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -709,6 +711,7 @@ class BillingScreen(QWidget):
         prev_row = self.table.currentRow() if keep_row is None else keep_row
         self.table.setRowCount(len(self.cart))
         for row, entry in enumerate(self.cart):
+            self.table.setRowHeight(row, 42)
             name = QTableWidgetItem(entry["name"])
             name.setData(Qt.ItemDataRole.UserRole, entry["id"])
             self.table.setItem(row, 0, name)
@@ -717,6 +720,8 @@ class BillingScreen(QWidget):
             qty.setRange(1, max(1, entry["stock_qty"]))
             qty.setValue(entry["qty"])
             qty.setFont(QFont("Segoe UI", 12, QFont.Weight.DemiBold))
+            qty.setFixedSize(82, 30)
+            qty.setStyleSheet("min-height:30px; max-height:30px; padding:1px 4px; font-size:12px;")
             qty.valueChanged.connect(lambda value, pid=entry["id"]: self._set_qty(pid, value))
             self.table.setCellWidget(row, 1, qty)
 
@@ -730,6 +735,8 @@ class BillingScreen(QWidget):
             discount.setPrefix("Rs ")
             discount.setValue(entry["discount"])
             discount.setFont(QFont("Segoe UI", 12))
+            discount.setFixedSize(126, 30)
+            discount.setStyleSheet("min-height:30px; max-height:30px; padding:1px 4px; font-size:12px;")
             discount.valueChanged.connect(lambda value, pid=entry["id"]: self._set_item_discount(pid, value))
             self.table.setCellWidget(row, 3, discount)
 
@@ -737,9 +744,11 @@ class BillingScreen(QWidget):
             total.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self.table.setItem(row, 4, total)
 
-            remove = QPushButton("✕ Remove")
+            remove = QPushButton("×")
             remove.setProperty("compact", True)
             remove.setProperty('variant', 'danger')
+            remove.setFixedSize(30, 30)
+            remove.setToolTip("Remove item from bill")
             remove.clicked.connect(lambda _=False, pid=entry["id"]: self._remove_item(pid))
             self.table.setCellWidget(row, 5, remove)
 

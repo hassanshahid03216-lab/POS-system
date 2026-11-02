@@ -7,7 +7,7 @@ from typing import Any, Callable
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal, Slot
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QHeaderView, QLabel,
+    QAbstractItemView, QAbstractSpinBox, QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QMessageBox, QPushButton, QSpinBox, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
@@ -135,7 +135,11 @@ class SaleReturnsScreen(QWidget):
         self.items_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.items_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.items_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.items_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.items_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
+        self.items_table.setColumnWidth(4, 156)
+        self.items_table.setColumnWidth(3, 86)
+        self.items_table.verticalHeader().setDefaultSectionSize(42)
+        self.items_table.verticalHeader().setMinimumSectionSize(42)
         right_box.addWidget(self.items_table, 1)
 
         self.refund_total_label = QLabel("Total Refund Amount: Rs 0.00")
@@ -303,8 +307,8 @@ class SaleReturnsScreen(QWidget):
         )
 
         self.items_table.setRowCount(len(items))
+        self.items_table.setColumnWidth(4, 156)
         self.return_spinboxes = []
-
         for row, it in enumerate(items):
             self.items_table.setItem(row, 0, QTableWidgetItem(it["name"]))
             self.items_table.setItem(row, 1, QTableWidgetItem(f"Rs {float(it['unit_price']):,.2f}"))
@@ -315,8 +319,30 @@ class SaleReturnsScreen(QWidget):
             spin = QSpinBox()
             spin.setRange(0, max(0, available_to_return))
             spin.setValue(0)
+            spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+            spin.setFixedSize(48, 30)
+            spin.setStyleSheet("min-height:30px; max-height:30px; padding:1px 3px; font-size:12px;")
+            spin.setToolTip(f"Choose 0 to {available_to_return} units to return")
             spin.valueChanged.connect(self._recalc_refund)
-            self.items_table.setCellWidget(row, 4, spin)
+            qty_control = QWidget()
+            qty_layout = QHBoxLayout(qty_control)
+            qty_layout.setContentsMargins(2, 0, 2, 0)
+            qty_layout.setSpacing(3)
+            minus = QPushButton("−")
+            plus = QPushButton("+")
+            for button in (minus, plus):
+                button.setFixedSize(26, 28)
+                button.setStyleSheet("min-height:26px;max-height:28px;padding:0;font-size:15px;font-weight:700;")
+            minus.clicked.connect(lambda _=False, field=spin: field.setValue(field.value() - 1))
+            plus.clicked.connect(lambda _=False, field=spin: field.setValue(field.value() + 1))
+            spin.valueChanged.connect(lambda value, dec=minus, inc=plus, maximum=available_to_return: (dec.setEnabled(value > 0), inc.setEnabled(value < maximum)))
+            minus.setEnabled(False)
+            plus.setEnabled(available_to_return > 0)
+            qty_layout.addWidget(minus)
+            qty_layout.addWidget(spin)
+            qty_layout.addWidget(plus)
+            self.items_table.setCellWidget(row, 4, qty_control)
             self.return_spinboxes.append((it, spin))
 
         self.process_btn.setEnabled(True)
@@ -396,11 +422,10 @@ class SaleReturnsScreen(QWidget):
             res, receipt = result_tuple
             play_success_ding()
 
-            # 1. Immediately refresh the left sales table so net amounts update right away
+            # Clear the processed bill so the next Enter cannot repeat its return quantities.
+            self.sales_table.clearSelection()
+            self._reset_return_form()
             self.load_recent_sales()
-
-            # 2. Immediately refresh current bill on the right side so remaining items update
-            self._load_sale_details(sale_id)
 
             # Generate image and copy to clipboard
             self._receipt_img_path = None
@@ -444,8 +469,8 @@ class SaleReturnsScreen(QWidget):
 
                 # Get phone number safely if customer was linked
                 phone = ""
-                if self.current_sale_data and "sale" in self.current_sale_data:
-                    phone = self.current_sale_data["sale"].get("phone", "")
+                if "sale" in data:
+                    phone = data["sale"].get("phone", "")
 
                 url = generate_whatsapp_url(receipt, phone_number=phone, include_full_text=False)
                 webbrowser.open(url)
