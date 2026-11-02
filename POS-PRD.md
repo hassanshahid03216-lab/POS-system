@@ -41,7 +41,7 @@ Most small individual shops in Pakistan (kiryana stores, mobile shops, pharmacie
 ### 4.1 Billing / Point of Sale
 - Add items via barcode scan or search
 - Quantity, discount, tax per item
-- Multiple payment modes: Cash, Card, JazzCash/EasyPaisa (manual entry)
+- Multiple payment modes: Cash, Card, Online Payment (manual entry)
 - Print/save receipt (thermal printer support + PDF fallback)
 - Hold/resume a bill (for multitasking at counter)
 

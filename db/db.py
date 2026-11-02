@@ -192,6 +192,13 @@ def init_db():
         if column not in existing:
             cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
+    customer_cols = {row[1] for row in cur.execute("PRAGMA table_info(customers)")}
+    if "phone" not in customer_cols:
+        cur.execute("ALTER TABLE customers ADD COLUMN phone TEXT DEFAULT ''")
+
+    cur.execute("UPDATE sales SET payment_mode = 'Online Payment' WHERE lower(replace(replace(replace(payment_mode, ' ', ''), '-', ''), '_', '')) IN ('jazzcash', 'easypaisa')")
+    cur.execute("UPDATE customer_transactions SET payment_method = 'Online Payment' WHERE lower(replace(replace(replace(payment_method, ' ', ''), '-', ''), '_', '')) IN ('jazzcash', 'easypaisa')")
+
     stock_sql = cur.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='stock_movements'").fetchone()[0]
     if "damaged_return" not in stock_sql:
         cur.execute("ALTER TABLE stock_movements RENAME TO stock_movements_old")
@@ -222,7 +229,7 @@ def init_db():
 
 def checkout_sale(items, payment_mode, bill_discount=0, held_bill_id=None, customer_id=None,
                   exchange_credit=0, voucher_code=None):
-    valid_modes = ("Cash", "Card", "JazzCash", "EasyPaisa", "Credit / Khata")
+    valid_modes = ("Cash", "Card", "Online Payment", "Credit / Khata")
     if payment_mode not in valid_modes:
         raise ValueError(f"Choose a valid payment mode: {', '.join(valid_modes)}.")
     if not items:

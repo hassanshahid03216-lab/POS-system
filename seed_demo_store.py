@@ -137,7 +137,7 @@ def seed_demo(db_target=None):
 
     print("[*] Seeding Realistic Historical Sales (14 Days)...")
     # Generate 45 realistic past sales across different hours and days
-    modes = ["Cash", "Cash", "Cash", "Card", "JazzCash", "EasyPaisa"]
+    modes = ["Cash", "Cash", "Cash", "Card", "Online Payment", "Online Payment"]
     base_date = now - timedelta(days=14)
 
     for day_offset in range(15):

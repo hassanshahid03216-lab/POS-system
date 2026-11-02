@@ -25,7 +25,7 @@ A complete inventory of the features implemented in this codebase, derived direc
 - Stock-limit guard — cannot add/increase quantity beyond available stock.
 - Bill-level discount field (Rs) in addition to per-item discounts.
 - Live subtotal / discount / total labels, recalculated on every change.
-- **Payment modes**: Cash, Card, JazzCash, EasyPaisa, Credit / Khata.
+- **Payment modes**: Cash, Card, Online Payment, Credit / Khata.
 - Cash-tendered calculator with automatic change-due computation, and quick "exact amount" note buttons.
 - Credit/Khata checkout requires selecting a registered customer.
 - **Hold Bill (F2)** — park the current cart (with bill discount) for later and start a new sale.

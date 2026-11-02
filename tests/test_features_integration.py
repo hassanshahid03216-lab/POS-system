@@ -129,7 +129,7 @@ class TestFeatureIntegration(unittest.TestCase):
         """Simulate neighborhood grocery Khata (Udhaar):
         1. Regular customer created
         2. Customer buys groceries on credit -> balance increases
-        3. Customer makes partial repayment via JazzCash -> balance decreases
+        3. Customer makes partial repayment via Online Payment -> balance decreases
         4. Customer buys more groceries -> balance updates
         5. Full final cash payment clears ledger balance to 0.0
         """
@@ -147,8 +147,8 @@ class TestFeatureIntegration(unittest.TestCase):
                          payment_mode="Credit / Khata", customer_id=cid)
         self.assertEqual(db.get_customer(cid)["balance"], 3650.0)
 
-        # Partial repayment of Rs 2000 via JazzCash
-        db.record_customer_payment(cid, 2000.0, "JazzCash Ref #987654", payment_method="JazzCash")
+        # Partial repayment of Rs 2000 via Online Payment
+        db.record_customer_payment(cid, 2000.0, "Online Payment Ref #987654", payment_method="Online Payment")
         self.assertEqual(db.get_customer(cid)["balance"], 1650.0)
 
         # Final repayment of remaining Rs 1650 via Cash

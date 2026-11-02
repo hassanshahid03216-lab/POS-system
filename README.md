@@ -30,7 +30,7 @@
 - **Unknown Barcode Handling:** Register brand-new items or link scanned barcodes to existing inventory directly from the billing screen without interrupting checkout.
 - **Flexible Cart & Discounts:** Line-item quantity editing with live stock limits, per-item discounts, and bill-level flat discounts.
 - **Hold & Resume Bills:** Park an in-progress cart (`F2`) to serve another customer and resume it instantly (`F3`).
-- **Multiple Payment Methods:** Supports Cash (with change-due calculator and quick cash notes), Card, JazzCash, EasyPaisa, and Credit / Khata.
+- **Multiple Payment Methods:** Supports Cash (with change-due calculator and quick cash notes), Card, Online Payment, and Credit / Khata.
 - **Audio Feedback:** Native audio tones for barcode scans, successful checkouts, and validation errors.
 
 ### 2. Receipt Management & Hardware Integration

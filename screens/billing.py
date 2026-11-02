@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import webbrowser
+import urllib.parse
 from datetime import datetime
 from typing import Any, Callable
 
@@ -16,9 +17,26 @@ from PySide6.QtWidgets import (
 )
 
 from db import db
+from app_settings import load_settings
 from services.receipt_image import copy_receipt_image_to_clipboard, generate_receipt_image
 from services.receipts import generate_whatsapp_url, print_or_save_receipt
 from services.sound import play_error_beep, play_scan_beep, play_success_ding
+
+
+WHATSAPP_DISCOUNT_MESSAGE = "Thank you for shopping at {shop_name}{customer_suffix}. Your bill total is {currency} {total:.2f}. You received a total discount of {currency} {discount:.2f}. Your final payable amount is {currency} {amount_due:.2f}."
+
+
+def _normalize_pakistani_phone(phone):
+    compact = str(phone or "").strip().replace(" ", "").replace("-", "")
+    if compact.startswith("+"):
+        compact = compact[1:]
+    if not compact or not all("0" <= char <= "9" for char in compact):
+        return None
+    if len(compact) == 11 and compact.startswith("03"):
+        return "92" + compact[1:]
+    if len(compact) == 12 and compact.startswith("923"):
+        return compact
+    return None
 
 
 def _set_visual_role(widget, role: str):
@@ -181,7 +199,7 @@ class _CheckoutDialog(QDialog):
 
         # Payment Mode
         self.payment_mode = QComboBox()
-        self.payment_mode.addItems(["Cash", "Credit / Khata (خاتہ)", "Card", "JazzCash", "EasyPaisa"])
+        self.payment_mode.addItems(["Cash", "Credit / Khata (خاتہ)", "Card", "Online Payment"])
         self.payment_mode.currentTextChanged.connect(self._payment_mode_changed)
         form.addRow("Payment Mode:", self.payment_mode)
 
@@ -193,6 +211,12 @@ class _CheckoutDialog(QDialog):
             bal_str = f" [Khata: Rs {bal:,.0f}]" if bal > 0 else ""
             self.customer_combo.addItem(f"{c['name']} ({c.get('phone') or 'No Phone'}){bal_str}", c["id"])
         form.addRow("Customer:", self.customer_combo)
+        self.customer_name_input = QLineEdit()
+        form.addRow("Name:", self.customer_name_input)
+        self.customer_phone_input = QLineEdit()
+        form.addRow("Phone:", self.customer_phone_input)
+        self.customer_combo.currentIndexChanged.connect(self._customer_selected)
+        self._customer_selected(self.customer_combo.currentIndex())
 
         # Cash Received & Change Box
         self.cash_frame = QFrame()
@@ -246,6 +270,10 @@ class _CheckoutDialog(QDialog):
 
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
+        QWidget.setTabOrder(self.customer_combo, self.customer_name_input)
+        QWidget.setTabOrder(self.customer_name_input, self.customer_phone_input)
+        QWidget.setTabOrder(self.customer_phone_input, cancel_btn)
+        QWidget.setTabOrder(cancel_btn, self.confirm_btn)
         btn_box.addStretch()
         btn_box.addWidget(cancel_btn)
         btn_box.addWidget(self.confirm_btn)
@@ -255,13 +283,14 @@ class _CheckoutDialog(QDialog):
         self.tendered_input.setFocus()
         self.tendered_input.selectAll()
 
+    def _customer_selected(self, _index):
+        customer_id = self.customer_combo.currentData()
+        customer = next((c for c in self.customers if c["id"] == customer_id), None)
+        self.customer_name_input.setText(customer.get("name", "") if customer else "")
+        self.customer_phone_input.setText(customer.get("phone", "") or "" if customer else "")
+
     def _quick_note_pressed(self, val):
-        current = self.tendered_input.value()
-        # If current is 0 or less than total, set to note
-        if current <= 0 or current < self.total_due:
-            self.tendered_input.setValue(float(val))
-        else:
-            self.tendered_input.setValue(current + float(val))
+        self.tendered_input.setValue(float(val))
 
     def _payment_mode_changed(self, mode):
         is_cash = mode == "Cash"
@@ -1103,6 +1132,29 @@ class BillingScreen(QWidget):
         self.status.setText("Ready for next sale")
         self.search.setFocus()
 
+    def _save_checkout_customer(self, selected_customer_id, name, phone):
+        selected = next((c for c in self.customers if c["id"] == selected_customer_id), None)
+        normalized_phone = _normalize_pakistani_phone(phone)
+        matched = next((c for c in self.customers
+                        if normalized_phone and _normalize_pakistani_phone(c.get("phone")) == normalized_phone), None)
+        customer = matched or selected
+        if not customer and not name and not phone:
+            return None
+        if customer:
+            saved_name = name or customer["name"]
+            saved_phone = normalized_phone or (customer.get("phone") or phone or "")
+            if saved_name != customer["name"] or saved_phone != (customer.get("phone") or ""):
+                db.update_customer(customer["id"], saved_name, saved_phone, customer.get("address") or "")
+                customer["name"] = saved_name
+                customer["phone"] = saved_phone
+            return customer
+        saved_name = name or phone or "Walk-in Customer"
+        customer_id = db.create_customer(saved_name, normalized_phone or phone or "", "")
+        customer = {"id": customer_id, "name": saved_name, "phone": normalized_phone or phone or "",
+                    "address": "", "balance": 0}
+        self.customers.append(customer)
+        return customer
+
     def _checkout(self):
         if not self.cart or self.busy:
             play_error_beep()
@@ -1122,8 +1174,18 @@ class BillingScreen(QWidget):
             return
 
         payment_mode = dialog.payment_mode.currentText()
-        customer_id = dialog.customer_combo.currentData()
-        customer_name = dialog.customer_combo.currentText().split(" (")[0] if customer_id else "Walk-in"
+        entered_name = dialog.customer_name_input.text().strip()
+        entered_phone = dialog.customer_phone_input.text().strip()
+        normalized_phone = _normalize_pakistani_phone(entered_phone)
+        if entered_phone and not normalized_phone:
+            QMessageBox.warning(self, "Invalid Phone Number", "Enter a valid Pakistani mobile number, or leave Phone empty.")
+        selected_customer_id = dialog.customer_combo.currentData()
+        customer = self._save_checkout_customer(
+            selected_customer_id, entered_name, normalized_phone or entered_phone
+        )
+        customer_id = customer["id"] if customer else None
+        customer_name = customer["name"] if customer else ""
+        customer_phone = customer.get("phone", "") if customer else ""
         tendered = dialog.tendered_amount
         change = dialog.change_amount
 
@@ -1136,7 +1198,8 @@ class BillingScreen(QWidget):
             "amount_due": total_due,
             "payment_mode": payment_mode,
             "customer_id": customer_id,
-            "customer_name": customer_name if customer_id else "",
+            "customer_name": customer_name,
+            "customer_phone": customer_phone,
             "tendered": tendered,
             "change": change,
             "voucher_credit": exchange_credit,
@@ -1198,6 +1261,25 @@ class BillingScreen(QWidget):
         self._worker = pr_worker
         self.pool.start(pr_worker)
 
+        if float(receipt.get("discount", 0)) > 0:
+            try:
+                phone = _normalize_pakistani_phone(receipt.get("customer_phone"))
+                if phone:
+                    settings = load_settings()
+                    customer_suffix = f", {receipt.get('customer_name')}" if receipt.get("customer_name") else ""
+                    message = WHATSAPP_DISCOUNT_MESSAGE.format(
+                        shop_name=settings.get("shop_name", "ShopFlow POS"),
+                        customer_suffix=customer_suffix,
+                        currency=settings.get("currency", "Rs"),
+                        total=float(receipt.get("total", 0)),
+                        discount=float(receipt.get("discount", 0)),
+                        amount_due=float(receipt.get("amount_due", receipt.get("total", 0))),
+                    )
+                    url = f"https://wa.me/{phone}?text={urllib.parse.quote(message, safe='')}"
+                    QTimer.singleShot(0, lambda target=url: self._open_whatsapp_discount_message(target))
+            except Exception as error:
+                print("WhatsApp message error:", error)
+
         # ── Post-sale dialog ─────────────────────────────────────────────────
         change_val = float(receipt.get("change", 0))
         change_text = f"\n💵  Return Change: Rs {change_val:,.2f}" if change_val > 0 else ""
@@ -1258,6 +1340,13 @@ class BillingScreen(QWidget):
 
         self.reload_data()
         self.search.setFocus()
+
+    @staticmethod
+    def _open_whatsapp_discount_message(url):
+        try:
+            webbrowser.open(url)
+        except Exception as error:
+            print("WhatsApp open error:", error)
 
     def _receipt_image_ready(self, path: str):
         """Called when the PNG receipt has been saved."""
