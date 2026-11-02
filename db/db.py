@@ -386,7 +386,8 @@ def get_sale_for_return(sale_id):
     try:
         sale = conn.execute("""
             SELECT s.id, s.timestamp, s.total, s.discount, s.payment_mode, s.customer_id,
-                   COALESCE(c.name, 'Walk-in Customer') AS customer_name
+                   COALESCE(c.name, 'Walk-in Customer') AS customer_name,
+                   COALESCE(c.phone, '') AS phone
             FROM sales s
             LEFT JOIN customers c ON c.id = s.customer_id
             WHERE s.id = ?
