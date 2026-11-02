@@ -219,7 +219,7 @@ def _product_form_values():
     sale = float(request.form.get("sale_price", 0))
     qty = int(request.form.get("stock_qty", 0))
     category = request.form.get("category", "").strip() or None
-    threshold = int(request.form.get("low_stock_threshold", 5))
+    threshold = int(request.form.get("low_stock_threshold", db.DEFAULT_LOW_STOCK_THRESHOLD))
     if not name or sale <= 0 or cost < 0 or qty < 0 or threshold < 0:
         raise ValueError("Name and a positive sale price are required; quantities and prices cannot be negative.")
     return name, barcode, cost, sale, qty, category, threshold

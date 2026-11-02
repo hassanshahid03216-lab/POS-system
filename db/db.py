@@ -11,6 +11,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_LOW_STOCK_THRESHOLD = 20
 if getattr(sys, "frozen", False):
     APP_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "ShopFlowPOS"
     APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -42,7 +43,7 @@ def init_db():
             sale_price REAL NOT NULL,
             stock_qty INTEGER DEFAULT 0,
             category TEXT,
-            low_stock_threshold INTEGER DEFAULT 5
+            low_stock_threshold INTEGER DEFAULT 20
         )
     """)
 
@@ -191,6 +192,15 @@ def init_db():
         existing = {row[1] for row in cur.execute(f"PRAGMA table_info({table})")}
         if column not in existing:
             cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    # Raise products that still carry the app's former default warning level.
+    # Run once so any threshold a user sets afterward remains untouched.
+    cur.execute("CREATE TABLE IF NOT EXISTS app_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)")
+    migration = "default_low_stock_threshold_20"
+    if not cur.execute("SELECT 1 FROM app_migrations WHERE name = ?", (migration,)).fetchone():
+        cur.execute("UPDATE products SET low_stock_threshold = 20 WHERE low_stock_threshold = 5")
+        cur.execute("INSERT INTO app_migrations (name, applied_at) VALUES (?, ?)",
+                    (migration, datetime.now().isoformat(timespec="seconds")))
 
     stock_sql = cur.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='stock_movements'").fetchone()[0]
     if "damaged_return" not in stock_sql:
@@ -824,7 +834,8 @@ def get_product(pid):
         conn.close()
 
 
-def create_product(name, barcode, cost_price, sale_price, stock_qty, category, low_stock_threshold=5):
+def create_product(name, barcode, cost_price, sale_price, stock_qty, category,
+                   low_stock_threshold=DEFAULT_LOW_STOCK_THRESHOLD):
     if not name.strip():
         raise ValueError("Product name is required.")
     conn = get_connection()
@@ -995,7 +1006,7 @@ def import_products_csv(file_path):
                     category = None
 
                 thresh_val = _find_field(row, ["low_stock_threshold", "low stock threshold", "low stock", "threshold", "min stock", "reorder level"])
-                low_stock = int(_clean_number(thresh_val, 5.0))
+                low_stock = int(_clean_number(thresh_val, float(DEFAULT_LOW_STOCK_THRESHOLD)))
 
                 existing = None
                 if barcode:
