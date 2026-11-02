@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import webbrowser
 from typing import Any, Callable
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal, Slot
 from PySide6.QtGui import QColor
@@ -13,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from db import db
-from services.receipts import print_or_save_receipt, generate_whatsapp_url
+from services.receipts import print_or_save_receipt
 from services.sound import play_success_ding, play_error_beep
 
 
@@ -107,7 +106,8 @@ class SaleReturnsScreen(QWidget):
         self.sales_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.sales_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.sales_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.sales_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.sales_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
+        self.sales_table.setColumnWidth(4, 96)
         self.sales_table.itemSelectionChanged.connect(self._sale_row_selected)
         left_box.addWidget(self.sales_table, 1)
         split.addWidget(left_card, 4)
@@ -167,7 +167,7 @@ class SaleReturnsScreen(QWidget):
         refund_lbl.setStyleSheet("font-weight: 600; color: #334155; min-width: 140px;")
         refund_row.addWidget(refund_lbl)
         self.refund_method = QComboBox()
-        self.refund_method.addItems(["Cash", "Credit / Khata Adjustment", "Store Credit Voucher", "Exchange Credit"])
+        self.refund_method.addItems(["Cash", "Credit / Khata Adjustment", "Store Credit Voucher", "Exchange Credit", "Online Payment"])
         refund_row.addWidget(self.refund_method, 1)
         right_box.addLayout(refund_row)
 
@@ -248,6 +248,7 @@ class SaleReturnsScreen(QWidget):
 
             btn = QPushButton("Select")
             btn.setProperty("compact", True)
+            btn.setFixedWidth(88)
             if refunded > 0 and net_total <= 0.01:
                 btn.setText("Returned")
                 btn.setStyleSheet(
@@ -321,8 +322,9 @@ class SaleReturnsScreen(QWidget):
             spin.setValue(0)
             spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
             spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-            spin.setFixedSize(48, 30)
-            spin.setStyleSheet("min-height:30px; max-height:30px; padding:1px 3px; font-size:12px;")
+            spin.setFixedSize(60, 30)
+            spin.setStyleSheet("min-height:30px; max-height:30px; padding:1px 3px; font-size:12px; color:#0F172A; background-color:#FFFFFF;")
+            spin.lineEdit().setStyleSheet("min-height:0px; max-height:28px; padding:0px; font-size:14px; font-weight:700; color:#111111; background-color:#FFFFFF; border:none;")
             spin.setToolTip(f"Choose 0 to {available_to_return} units to return")
             spin.valueChanged.connect(self._recalc_refund)
             qty_control = QWidget()
@@ -447,13 +449,12 @@ class SaleReturnsScreen(QWidget):
                 + (f"Voucher code: {res['voucher_code']}\n" if res.get("voucher_code") else "")
                 + "\nDigital receipt image is ready and copied to the clipboard."
             )
-            wa_btn = msg_box.addButton("📱  Send on WhatsApp", QMessageBox.ButtonRole.ActionRole)
             img_btn = msg_box.addButton("🖼️  View Image", QMessageBox.ButtonRole.ActionRole)
             fld_btn = msg_box.addButton("📁  Open Folder", QMessageBox.ButtonRole.ActionRole)
             ok_btn = msg_box.addButton(QMessageBox.StandardButton.Ok)
             exchange_btn = msg_box.addButton("Start Exchange in Billing", QMessageBox.ButtonRole.ActionRole)
             exchange_btn.setEnabled(refund_method == "Exchange Credit")
-            msg_box.setDefaultButton(wa_btn)
+            msg_box.setDefaultButton(ok_btn)
             msg_box.exec()
 
             clicked = msg_box.clickedButton()
@@ -462,32 +463,6 @@ class SaleReturnsScreen(QWidget):
                 workspace = self.parentWidget()
                 if workspace and hasattr(workspace, "start_exchange"):
                     workspace.start_exchange(res["refund_amount"], res["voucher_code"])
-            elif clicked == wa_btn:
-                if getattr(self, "_receipt_img_path", None):
-                    from services.receipt_image import copy_receipt_image_to_clipboard
-                    copy_receipt_image_to_clipboard(self._receipt_img_path)
-
-                # Get phone number safely if customer was linked
-                phone = ""
-                if "sale" in data:
-                    phone = data["sale"].get("phone", "")
-
-                url = generate_whatsapp_url(receipt, phone_number=phone, include_full_text=False)
-                webbrowser.open(url)
-
-                self.status.setStyleSheet("color: #38bdf8; font-weight: 700; font-size: 13px;")
-                self.status.setText("📋 Receipt image copied! WhatsApp chat mein jaa kar Ctrl + V dabayein.")
-
-                QMessageBox.information(
-                    self,
-                    "Paste Receipt Image 🖼️ (Ctrl + V)",
-                    "✅  WhatsApp khul gaya hai!\n\n"
-                    "📋 Receipt ki Image Clipboard mein copy ho chuki hai:\n\n"
-                    "👉 WhatsApp chat mein ja kar keyboard se [ Ctrl + V ] dabayein!\n"
-                    "👉 Image khud attach ho jayegi, phir Send (Enter) daba dein.\n\n"
-                    "(Aap 'Open Folder' se bhi image ko drag-and-drop kar sakte hain)"
-                )
-
             elif clicked == img_btn:
                 if getattr(self, "_receipt_img_path", None):
                     import os as _os

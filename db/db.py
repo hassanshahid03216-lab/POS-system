@@ -430,7 +430,7 @@ def process_sale_return(sale_id, returned_items, notes="", refund_method="Cash",
         sale = conn.execute("SELECT customer_id, payment_mode, discount FROM sales WHERE id = ?", (sale_id,)).fetchone()
         if not sale:
             raise ValueError("Sale record not found.")
-        if refund_method not in ("Cash", "Credit / Khata Adjustment", "Store Credit Voucher", "Exchange Credit"):
+        if refund_method not in ("Cash", "Credit / Khata Adjustment", "Store Credit Voucher", "Exchange Credit", "Online Payment"):
             raise ValueError("Choose a valid refund method.")
         if refund_method == "Credit / Khata Adjustment" and not sale["customer_id"]:
             raise ValueError("This sale has no linked customer for a Khata adjustment.")

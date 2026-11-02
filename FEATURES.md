@@ -70,7 +70,7 @@ A complete inventory of the features implemented in this codebase, derived direc
 ## 6. Sales Returns & Refunds (Wapasi / Exchange)
 - Look up any past sale by Bill/Sale ID, or browse a "recent completed sales" table.
 - Select which items (and quantities) from that sale are being returned.
-- Multiple **refund methods**: Cash, Credit / Khata Adjustment, Store Credit Voucher, Exchange Credit.
+- Multiple **refund methods**: Cash, Credit / Khata Adjustment, Store Credit Voucher, Exchange Credit, Online Payment.
 - Automatic restocking of returned items back into inventory (`stock_movements` type `return`).
 - Refund receipt generation (text, PDF/print, and PNG image) marked as a return document.
 - WhatsApp sharing of the refund receipt, same clipboard-image flow as sales receipts.

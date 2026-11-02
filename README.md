@@ -50,7 +50,7 @@
 ### 5. Sales Returns & Exchanges (Wapasi)
 - **Sale Lookup:** Search sales by bill number or browse recent transactions.
 - **Itemized Returns:** Return specific line items and quantities back to inventory with audit logging.
-- **Refund Flexibility:** Issue refunds via Cash, Khata adjustment, Store Credit voucher, or **Exchange Credit** that flows directly into the billing screen for the next purchase.
+- **Refund Flexibility:** Issue refunds via Cash, Khata adjustment, Store Credit voucher, **Exchange Credit**, or Online Payment.
 
 ### 6. Cash Shift & Drawer Balancing
 - **Day-End Closing:** Track opening float, mid-shift petty cash expenses, cash sales, Khata cash collections, and cash refunds.
