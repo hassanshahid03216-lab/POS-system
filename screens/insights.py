@@ -68,6 +68,36 @@ class _MetricCard(QFrame):
         layout.addWidget(self.detail)
 
 
+class CategoryAxis(pg.AxisItem):
+    """Custom PyQtGraph AxisItem that reliably displays string category labels on ticks."""
+
+    def __init__(self, orientation="bottom", **kwargs):
+        super().__init__(orientation, **kwargs)
+        self._categories: dict[int, str] = {}
+        self.setHeight(42)
+
+    def set_categories(self, categories: dict[int, str]):
+        self._categories = categories
+        ticks = [[(idx, name) for idx, name in categories.items()]]
+        self.setTicks(ticks)
+
+    def tickValues(self, minVal, maxVal, size):
+        if not self._categories:
+            return []
+        visible = [idx for idx in self._categories.keys() if (minVal - 0.5) <= idx <= (maxVal + 0.5)]
+        return [(1.0, visible)]
+
+    def tickStrings(self, values, scale, spacing):
+        strings = []
+        for val in values:
+            idx = int(round(val))
+            if abs(val - idx) < 0.25 and idx in self._categories:
+                strings.append(self._categories[idx])
+            else:
+                strings.append("")
+        return strings
+
+
 def _setup_plot(plot: pg.PlotWidget, title: str, y_label: str = ""):
     """Configures a modern, clean white PyQtGraph plot with proper non-scientific axes."""
     plot.setBackground("#FFFFFF")
@@ -249,8 +279,51 @@ class InsightsDashboard(QWidget):
         _setup_plot(self.hour_plot, "Customer Volume by Hour (Peak Traffic)", "Total Bills")
         hour_lay.addWidget(self.hour_plot)
 
+        # Section 3: Most Selling Products Table (Directly visible on main trends tab)
+        top_items_card = QFrame()
+        top_items_card.setStyleSheet("QFrame { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px; }")
+        top_items_lay = QVBoxLayout(top_items_card)
+        top_items_lay.setContentsMargins(12, 12, 12, 12)
+        top_items_lay.setSpacing(8)
+
+        top_header = QHBoxLayout()
+        top_title_box = QVBoxLayout()
+        top_title = QLabel("🏆 Most Selling Products in this Period")
+        top_title.setStyleSheet("font-size: 14px; font-weight: 700; color: #0F172A;")
+        top_sub = QLabel("Ranked by unit sales with total revenue generated and volume share")
+        top_sub.setStyleSheet("font-size: 11px; color: #64748B;")
+        top_title_box.addWidget(top_title)
+        top_title_box.addWidget(top_sub)
+        top_header.addLayout(top_title_box)
+        top_header.addStretch()
+
+        view_cat_btn = QPushButton("View Full Visual Analytics ➔")
+        view_cat_btn.setStyleSheet(
+            "QPushButton { background: #F1F5F9; color: #0284C7; font-weight: 600; font-size: 12px; "
+            "padding: 5px 12px; border: 1px solid #CBD5E1; border-radius: 6px; } "
+            "QPushButton:hover { background: #E0F2FE; border-color: #38BDF8; }"
+        )
+        view_cat_btn.clicked.connect(lambda: self.tabs.setCurrentIndex(1))
+        top_header.addWidget(view_cat_btn)
+        top_items_lay.addLayout(top_header)
+
+        self.trend_top_table = QTableWidget(0, 5)
+        self.trend_top_table.setHorizontalHeaderLabels([
+            "Rank", "Product Name", "Units Sold", "Total Revenue", "Volume Share"
+        ])
+        self.trend_top_table.verticalHeader().setVisible(False)
+        self.trend_top_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.trend_top_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.trend_top_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.trend_top_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.trend_top_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.trend_top_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.trend_top_table.setMaximumHeight(220)
+        top_items_lay.addWidget(self.trend_top_table)
+
         layout.addWidget(trend_card, 0, 0, 1, 3)
         layout.addWidget(hour_card, 0, 3, 1, 2)
+        layout.addWidget(top_items_card, 1, 0, 1, 5)
         return widget
 
     def _create_products_tab(self) -> QWidget:
@@ -265,7 +338,8 @@ class InsightsDashboard(QWidget):
         top_lay = QVBoxLayout(top_card)
         top_lay.setContentsMargins(12, 12, 12, 12)
 
-        self.top_plot = pg.PlotWidget()
+        self.top_axis = CategoryAxis(orientation="bottom")
+        self.top_plot = pg.PlotWidget(axisItems={"bottom": self.top_axis})
         _setup_plot(self.top_plot, "Top Best Selling Products (Units Sold)", "Units")
         top_lay.addWidget(self.top_plot)
 
@@ -275,9 +349,32 @@ class InsightsDashboard(QWidget):
         cat_lay = QVBoxLayout(cat_card)
         cat_lay.setContentsMargins(12, 12, 12, 12)
 
-        self.cat_plot = pg.PlotWidget()
+        self.cat_axis = CategoryAxis(orientation="bottom")
+        self.cat_plot = pg.PlotWidget(axisItems={"bottom": self.cat_axis})
         _setup_plot(self.cat_plot, "Revenue by Product Category (Rs)", "Revenue (Rs)")
         cat_lay.addWidget(self.cat_plot)
+
+        # Product Leaderboard Table
+        top_table_card = QFrame()
+        top_table_card.setStyleSheet("QFrame { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px; }")
+        top_table_lay = QVBoxLayout(top_table_card)
+        top_table_lay.setContentsMargins(12, 12, 12, 12)
+        
+        top_table_title = QLabel("🏆 Best Sellers Performance Ranking")
+        top_table_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #0F172A;")
+        top_table_lay.addWidget(top_table_title)
+
+        self.top_table = QTableWidget(0, 5)
+        self.top_table.setHorizontalHeaderLabels(["Rank", "Product Name", "Units Sold", "Total Revenue", "Avg Price / Unit"])
+        self.top_table.verticalHeader().setVisible(False)
+        self.top_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.top_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.top_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.top_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.top_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.top_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.top_table.setMaximumHeight(220)
+        top_table_lay.addWidget(self.top_table)
 
         # Payment Methods Table / Card
         pay_card = QFrame()
@@ -296,11 +393,13 @@ class InsightsDashboard(QWidget):
         self.pay_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.pay_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.pay_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.pay_table.setMaximumHeight(220)
         pay_lay.addWidget(self.pay_table)
 
         layout.addWidget(top_card, 0, 0, 1, 3)
         layout.addWidget(cat_card, 0, 3, 1, 2)
-        layout.addWidget(pay_card, 1, 0, 1, 5)
+        layout.addWidget(top_table_card, 1, 0, 1, 3)
+        layout.addWidget(pay_card, 1, 3, 1, 2)
         return widget
 
     def _create_advisor_tab(self) -> QWidget:
@@ -410,6 +509,7 @@ class InsightsDashboard(QWidget):
 
         # 3. Draw All Rich Charts
         self._draw_charts(data)
+        self._draw_top_products_tables(data.get("top_products", []), data.get("total_units_sold", 0))
         self._draw_restock_table(data.get("restock_needed", []))
         self._draw_slow_products(data.get("slow_products", []))
         self._draw_payment_table(data.get("payment_breakdown", []))
@@ -486,11 +586,12 @@ class InsightsDashboard(QWidget):
         self.top_plot.clear()
         if not products:
             self.top_plot.setTitle("Top Best Sellers · No sales yet in this period", color="#64748B")
+            self.top_axis.set_categories({})
             self.top_plot.setYRange(0, 10, padding=0.1)
         else:
-            self.top_plot.setTitle("Top Best Selling Products", color="#0F172A")
-            axis = self.top_plot.getAxis("bottom")
-            axis.setTicks([[(i, p["name"][:14]) for i, p in enumerate(products)]])
+            self.top_plot.setTitle("Top Best Selling Products (Units Sold)", color="#0F172A")
+            cat_map = {i: (p["name"][:12] + "…" if len(p["name"]) > 12 else p["name"]) for i, p in enumerate(products)}
+            self.top_axis.set_categories(cat_map)
             quantities = [p["quantity"] for p in products]
             top_bars = pg.BarGraphItem(
                 x=list(range(len(products))),
@@ -499,19 +600,36 @@ class InsightsDashboard(QWidget):
                 brush=QColor("#6366F1")
             )
             self.top_plot.addItem(top_bars)
+
+            max_qty = max(quantities, default=5)
+            for i, p in enumerate(products):
+                qty = p["quantity"]
+                p_name = p["name"]
+                short_name = p_name[:11] + ("…" if len(p_name) > 11 else "")
+                label = pg.TextItem(
+                    html=f"<div style='text-align:center; font-family: Segoe UI, sans-serif;'>"
+                         f"<b style='color:#4338CA; font-size:11px;'>{qty} sold</b><br/>"
+                         f"<span style='color:#334155; font-size:10px;'>{short_name}</span>"
+                         f"</div>",
+                    anchor=(0.5, 1.1)
+                )
+                label.setPos(i, qty)
+                self.top_plot.addItem(label)
+
             self.top_plot.setXRange(-0.5, len(products) - 0.5, padding=0)
-            self.top_plot.setYRange(0, max(max(quantities, default=5), 5) * 1.2, padding=0)
+            self.top_plot.setYRange(0, max_qty * 1.35, padding=0)
 
         # 4. Category Breakdown
         categories = data.get("category_sales", [])
         self.cat_plot.clear()
         if not categories:
             self.cat_plot.setTitle("Revenue by Category · No data yet", color="#64748B")
+            self.cat_axis.set_categories({})
             self.cat_plot.setYRange(0, 10, padding=0.1)
         else:
-            self.cat_plot.setTitle("Revenue by Product Category", color="#0F172A")
-            cat_axis = self.cat_plot.getAxis("bottom")
-            cat_axis.setTicks([[(i, c["category"][:14]) for i, c in enumerate(categories)]])
+            self.cat_plot.setTitle("Revenue by Product Category (Rs)", color="#0F172A")
+            cat_map = {i: (c["category"][:12] + "…" if len(c["category"]) > 12 else c["category"]) for i, c in enumerate(categories)}
+            self.cat_axis.set_categories(cat_map)
             revenues = [c["revenue"] for c in categories]
             cat_bars = pg.BarGraphItem(
                 x=list(range(len(categories))),
@@ -520,8 +638,94 @@ class InsightsDashboard(QWidget):
                 brush=QColor("#10B981")
             )
             self.cat_plot.addItem(cat_bars)
+
+            max_rev = max(revenues, default=10)
+            for i, c in enumerate(categories):
+                rev = c["revenue"]
+                label = pg.TextItem(
+                    html=f"<div style='text-align:center; font-family: Segoe UI, sans-serif;'>"
+                         f"<b style='color:#059669; font-size:11px;'>Rs {rev:,.0f}</b>"
+                         f"</div>",
+                    anchor=(0.5, 1.1)
+                )
+                label.setPos(i, rev)
+                self.cat_plot.addItem(label)
+
             self.cat_plot.setXRange(-0.5, len(categories) - 0.5, padding=0)
-            self.cat_plot.setYRange(0, max(max(revenues, default=10), 10) * 1.2, padding=0)
+            self.cat_plot.setYRange(0, max_rev * 1.25, padding=0)
+
+    def _draw_top_products_tables(self, products: list[dict], total_units: int):
+        medals = {0: "🥇 #1", 1: "🥈 #2", 2: "🥉 #3"}
+        
+        # 1. Populate Tab 1: trend_top_table
+        self.trend_top_table.setRowCount(len(products))
+        for row, p in enumerate(products):
+            rank_str = medals.get(row, f"#{row + 1}")
+            qty = int(p.get("quantity") or 0)
+            rev = float(p.get("total_revenue") or 0)
+            pct = (qty / total_units * 100) if total_units > 0 else 0.0
+
+            rank_item = QTableWidgetItem(rank_str)
+            rank_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            rank_item.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+
+            name_item = QTableWidgetItem(p["name"])
+            name_item.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+            name_item.setForeground(QColor("#0F172A"))
+
+            qty_item = QTableWidgetItem(f"{qty} units")
+            qty_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            qty_item.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+            qty_item.setForeground(QColor("#4338CA"))
+
+            rev_item = QTableWidgetItem(f"Rs {rev:,.2f}")
+            rev_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            rev_item.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+            rev_item.setForeground(QColor("#047857"))
+
+            pct_item = QTableWidgetItem(f"{pct:.1f}%")
+            pct_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+            self.trend_top_table.setItem(row, 0, rank_item)
+            self.trend_top_table.setItem(row, 1, name_item)
+            self.trend_top_table.setItem(row, 2, qty_item)
+            self.trend_top_table.setItem(row, 3, rev_item)
+            self.trend_top_table.setItem(row, 4, pct_item)
+
+        # 2. Populate Tab 2: top_table
+        self.top_table.setRowCount(len(products))
+        for row, p in enumerate(products):
+            rank_str = medals.get(row, f"#{row + 1}")
+            qty = int(p.get("quantity") or 0)
+            rev = float(p.get("total_revenue") or 0)
+            avg_price = (rev / qty) if qty > 0 else 0.0
+
+            rank_item = QTableWidgetItem(rank_str)
+            rank_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            rank_item.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+
+            name_item = QTableWidgetItem(p["name"])
+            name_item.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+            name_item.setForeground(QColor("#0F172A"))
+
+            qty_item = QTableWidgetItem(f"{qty} sold")
+            qty_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            qty_item.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+            qty_item.setForeground(QColor("#4338CA"))
+
+            rev_item = QTableWidgetItem(f"Rs {rev:,.2f}")
+            rev_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            rev_item.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+            rev_item.setForeground(QColor("#047857"))
+
+            avg_item = QTableWidgetItem(f"Rs {avg_price:,.2f}")
+            avg_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+            self.top_table.setItem(row, 0, rank_item)
+            self.top_table.setItem(row, 1, name_item)
+            self.top_table.setItem(row, 2, qty_item)
+            self.top_table.setItem(row, 3, rev_item)
+            self.top_table.setItem(row, 4, avg_item)
 
     def _draw_payment_table(self, payments):
         self.pay_table.setRowCount(len(payments))
