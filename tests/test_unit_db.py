@@ -145,6 +145,7 @@ class TestDatabaseUnit(unittest.TestCase):
         db.create_product("Bread", "111", 50, 70, 20, "Bakery", 5)
         db.create_product("Low Stock Butter", "222", 150, 200, 3, "Dairy", 5)
         db.create_product("Eggs Dozen", "333", 180, 240, 10, "Dairy", 5)
+        db.create_product("Oats", "444", 100, 140, 25, "Bakery", 1)
 
         # Filter by category
         dairy = db.list_products(category="Dairy")
@@ -152,8 +153,8 @@ class TestDatabaseUnit(unittest.TestCase):
 
         # Low stock filter
         low_stock = db.list_products(low_stock_only=True)
-        self.assertEqual(len(low_stock), 1)
-        self.assertEqual(low_stock[0]["name"], "Low Stock Butter")
+        self.assertEqual({p["name"] for p in low_stock}, {"Bread", "Low Stock Butter", "Eggs Dozen"})
+        self.assertTrue(all(p["low_stock_threshold"] == 20 for p in db.list_products()))
 
     # ── Billing & Sales Unit Tests ───────────────────────────────────────
 

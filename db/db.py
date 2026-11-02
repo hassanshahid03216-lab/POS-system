@@ -201,6 +201,11 @@ def init_db():
         cur.execute("UPDATE products SET low_stock_threshold = 20 WHERE low_stock_threshold = 5")
         cur.execute("INSERT INTO app_migrations (name, applied_at) VALUES (?, ?)",
                     (migration, datetime.now().isoformat(timespec="seconds")))
+    uniform_migration = "uniform_low_stock_threshold_20"
+    if not cur.execute("SELECT 1 FROM app_migrations WHERE name = ?", (uniform_migration,)).fetchone():
+        cur.execute("UPDATE products SET low_stock_threshold = ?", (DEFAULT_LOW_STOCK_THRESHOLD,))
+        cur.execute("INSERT INTO app_migrations (name, applied_at) VALUES (?, ?)",
+                    (uniform_migration, datetime.now().isoformat(timespec="seconds")))
 
     stock_sql = cur.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='stock_movements'").fetchone()[0]
     if "damaged_return" not in stock_sql:
@@ -842,7 +847,7 @@ def create_product(name, barcode, cost_price, sale_price, stock_qty, category,
     try:
         cur = conn.execute(
             "INSERT INTO products (name, barcode, cost_price, sale_price, stock_qty, category, low_stock_threshold) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (name.strip(), barcode.strip() if barcode else None, float(cost_price), float(sale_price), int(stock_qty), category.strip() if category else None, int(low_stock_threshold)),
+            (name.strip(), barcode.strip() if barcode else None, float(cost_price), float(sale_price), int(stock_qty), category.strip() if category else None, DEFAULT_LOW_STOCK_THRESHOLD),
         )
         pid = cur.lastrowid
         conn.commit()
@@ -858,7 +863,7 @@ def update_product(pid, name, barcode, cost_price, sale_price, stock_qty, catego
     try:
         conn.execute(
             "UPDATE products SET name = ?, barcode = ?, cost_price = ?, sale_price = ?, stock_qty = ?, category = ?, low_stock_threshold = ? WHERE id = ?",
-            (name.strip(), barcode.strip() if barcode else None, float(cost_price), float(sale_price), int(stock_qty), category.strip() if category else None, int(low_stock_threshold), pid),
+            (name.strip(), barcode.strip() if barcode else None, float(cost_price), float(sale_price), int(stock_qty), category.strip() if category else None, DEFAULT_LOW_STOCK_THRESHOLD, pid),
         )
         conn.commit()
     finally:
@@ -1005,8 +1010,7 @@ def import_products_csv(file_path):
                 if category in ("", "None", "nan", "null"):
                     category = None
 
-                thresh_val = _find_field(row, ["low_stock_threshold", "low stock threshold", "low stock", "threshold", "min stock", "reorder level"])
-                low_stock = int(_clean_number(thresh_val, float(DEFAULT_LOW_STOCK_THRESHOLD)))
+                low_stock = DEFAULT_LOW_STOCK_THRESHOLD
 
                 existing = None
                 if barcode:
