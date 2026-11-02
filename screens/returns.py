@@ -295,11 +295,22 @@ class SaleReturnsScreen(QWidget):
             (it["qty"] - it["already_returned"]) > 0 for it in items
         )
         if not any_returnable:
-            self._reset_return_form()
+            # Keep a fully returned bill visible for review, including all sold and
+            # returned quantities. It remains a real bill even when its balance is zero.
+            self.items_table.setRowCount(len(items))
+            self.return_spinboxes = []
+            for row, it in enumerate(items):
+                self.items_table.setItem(row, 0, QTableWidgetItem(it["name"]))
+                self.items_table.setItem(row, 1, QTableWidgetItem(f"Rs {float(it['unit_price']):,.2f}"))
+                self.items_table.setItem(row, 2, QTableWidgetItem(str(it["qty"])))
+                self.items_table.setItem(row, 3, QTableWidgetItem(str(it["already_returned"])))
+                self.items_table.setItem(row, 4, QTableWidgetItem("Fully returned"))
             self.bill_info.setText(
                 f"✅ Bill #{sale['id']} — All items have been fully returned."
             )
             self.status.setText(f"Bill #{sale['id']} has no remaining items to return.")
+            self.refund_total_label.setText("Total Refund Amount: Rs 0.00")
+            self.process_btn.setEnabled(False)
             return
 
         self.bill_info.setText(
@@ -397,6 +408,7 @@ class SaleReturnsScreen(QWidget):
             return
 
         sale_id = self.current_sale_data["sale"]["id"]
+        sale_data = self.current_sale_data["sale"].copy()
         notes = self.reason_input.text().strip()
         refund_method = self.refund_method.currentText()
         restock = self.restock_check.isChecked()
@@ -415,7 +427,11 @@ class SaleReturnsScreen(QWidget):
                 "voucher_code": res.get("voucher_code"),
                 "items": returned_items
             }
-            print_or_save_receipt(receipt)
+            # The database return has committed; a printer problem must not hide success.
+            try:
+                print_or_save_receipt(receipt)
+            except Exception as error:
+                print("Return receipt output error:", error)
             return res, receipt
 
         def _on_done(result_tuple):
@@ -429,10 +445,11 @@ class SaleReturnsScreen(QWidget):
 
             # Generate image and copy to clipboard
             self._receipt_img_path = None
+            receipt_image_copied = False
             try:
                 from services.receipt_image import generate_receipt_image, copy_receipt_image_to_clipboard
                 self._receipt_img_path = generate_receipt_image(receipt)
-                copy_receipt_image_to_clipboard(self._receipt_img_path)
+                receipt_image_copied = copy_receipt_image_to_clipboard(self._receipt_img_path)
             except Exception as e:
                 print("Receipt image error:", e)
             
@@ -445,7 +462,8 @@ class SaleReturnsScreen(QWidget):
                 f"Refund method: {refund_method}\n"
                 f"Inventory: {'restocked' if restock else 'recorded as damaged; stock unchanged'}\n"
                 + (f"Voucher code: {res['voucher_code']}\n" if res.get("voucher_code") else "")
-                + "\nDigital receipt image is ready and copied to the clipboard."
+                + ("\nDigital receipt image is ready and copied to the clipboard."
+                   if receipt_image_copied else "\nReceipt image could not be copied; use View Image or Open Folder.")
             )
             wa_btn = msg_box.addButton("📱  Send on WhatsApp", QMessageBox.ButtonRole.ActionRole)
             img_btn = msg_box.addButton("🖼️  View Image", QMessageBox.ButtonRole.ActionRole)
@@ -463,30 +481,49 @@ class SaleReturnsScreen(QWidget):
                 if workspace and hasattr(workspace, "start_exchange"):
                     workspace.start_exchange(res["refund_amount"], res["voucher_code"])
             elif clicked == wa_btn:
+                image_copied = False
                 if getattr(self, "_receipt_img_path", None):
                     from services.receipt_image import copy_receipt_image_to_clipboard
-                    copy_receipt_image_to_clipboard(self._receipt_img_path)
+                    image_copied = copy_receipt_image_to_clipboard(self._receipt_img_path)
 
                 # Get phone number safely if customer was linked
                 phone = ""
-                if "sale" in data:
-                    phone = data["sale"].get("phone", "")
+                phone = sale_data.get("phone", "")
 
-                url = generate_whatsapp_url(receipt, phone_number=phone, include_full_text=False)
-                webbrowser.open(url)
-
-                self.status.setStyleSheet("color: #38bdf8; font-weight: 700; font-size: 13px;")
-                self.status.setText("📋 Receipt image copied! WhatsApp chat mein jaa kar Ctrl + V dabayein.")
-
-                QMessageBox.information(
-                    self,
-                    "Paste Receipt Image 🖼️ (Ctrl + V)",
-                    "✅  WhatsApp khul gaya hai!\n\n"
-                    "📋 Receipt ki Image Clipboard mein copy ho chuki hai:\n\n"
-                    "👉 WhatsApp chat mein ja kar keyboard se [ Ctrl + V ] dabayein!\n"
-                    "👉 Image khud attach ho jayegi, phir Send (Enter) daba dein.\n\n"
-                    "(Aap 'Open Folder' se bhi image ko drag-and-drop kar sakte hain)"
+                item_lines = [
+                    f"• {item['name']} × {int(item['qty'])} — Rs {float(item.get('refund_amount', 0)):,.2f}"
+                    for item in receipt["items"]
+                ]
+                caption = (
+                    f"Sale return #{res['return_id']} for Bill #{sale_id}\n"
+                    f"Customer: {sale_data.get('customer_name', 'Walk-in Customer')}\n"
+                    + "\n".join(item_lines)
+                    + f"\nRefund: Rs {res['refund_amount']:,.2f} ({refund_method})"
+                    + (f"\nVoucher: {res['voucher_code']}" if res.get("voucher_code") else "")
                 )
+                url = generate_whatsapp_url(
+                    receipt, phone_number=phone, include_full_text=False, caption=caption
+                )
+                try:
+                    opened = webbrowser.open(url)
+                except Exception:
+                    opened = False
+                if opened:
+                    image_hint = (
+                        "The receipt image is copied; paste it with Ctrl+V if you want to attach it."
+                        if image_copied else "The receipt image could not be copied; use Open Folder to attach it."
+                    )
+                    QMessageBox.information(
+                        self, "Complete the WhatsApp Send",
+                        "The return has been saved and its item details and refund are prefilled in WhatsApp.\n\n"
+                        f"{image_hint}\nReview the message, then press Send in WhatsApp.",
+                    )
+                else:
+                    QMessageBox.warning(
+                        self, "WhatsApp Not Opened",
+                        "The return has been saved, but WhatsApp could not be opened. "
+                        "Use Open Folder to access the receipt.",
+                    )
 
             elif clicked == img_btn:
                 if getattr(self, "_receipt_img_path", None):
