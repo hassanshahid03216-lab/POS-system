@@ -319,9 +319,9 @@ class _Workspace(QWidget):
             nav.addWidget(button)
 
         nav.addStretch()
-        close_cash = QPushButton("Day End / Cash Drawer")
-        close_cash.clicked.connect(self._cash_closing)
-        nav.addWidget(close_cash)
+        self.close_cash_btn = QPushButton("Day End / Cash Drawer")
+        self.close_cash_btn.clicked.connect(self._cash_closing)
+        nav.addWidget(self.close_cash_btn)
 
         who = QLabel(f"👤 {user['name']} ({user['role'].title()})")
         who.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
@@ -331,7 +331,7 @@ class _Workspace(QWidget):
         logout = QPushButton("Log out")
         logout.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         logout.setStyleSheet("color: #DC2626; border: 1px solid #FCA5A5; background: #FEF2F2;")
-        logout.clicked.connect(self.logged_out.emit)
+        logout.clicked.connect(self._on_logout)
         nav.addWidget(logout)
 
         nav_container = QWidget()
@@ -340,13 +340,50 @@ class _Workspace(QWidget):
         root.addWidget(nav_container)
 
         root.addWidget(self.pages, 1)
+        self._update_drawer_button()
         self._show_page("⚡ Billing")
 
     def _add_page(self, name, page):
         self.page_index[name] = self.pages.addWidget(page)
 
+    def _update_drawer_button(self):
+        shift = db.active_cash_shift()
+        if shift:
+            self.close_cash_btn.setText(f"🟢 Drawer Active (#{shift['id']})")
+            self.close_cash_btn.setStyleSheet(
+                "QPushButton { background: #DCFCE7; color: #166534; font-weight: bold; border: 1px solid #86EFAC; border-radius: 6px; padding: 5px 12px; }"
+                "QPushButton:hover { background: #BBF7D0; }"
+            )
+        else:
+            self.close_cash_btn.setText("⚪ Day End / Cash Drawer")
+            self.close_cash_btn.setStyleSheet(
+                "QPushButton { background: #F8FAFC; color: #334155; font-weight: 600; border: 1px solid #CBD5E1; border-radius: 6px; padding: 5px 12px; }"
+                "QPushButton:hover { background: #E2E8F0; }"
+            )
+
+    def _on_logout(self):
+        shift = db.active_cash_shift()
+        if shift:
+            ans = QMessageBox.question(
+                self,
+                "Active Cash Shift Open",
+                f"Cash shift #{shift['id']} opened by {shift['cashier_name']} is currently open.\n\n"
+                "Would you like to close and reconcile your cash drawer before logging out?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Yes,
+            )
+            if ans == QMessageBox.StandardButton.Cancel:
+                return
+            if ans == QMessageBox.StandardButton.Yes:
+                CashClosingDialog(self.user, self).exec()
+                self._update_drawer_button()
+                if db.active_cash_shift():
+                    return
+        self.logged_out.emit()
+
     def _cash_closing(self):
         CashClosingDialog(self.user, self).exec()
+        self._update_drawer_button()
 
     def start_exchange(self, amount, voucher_code):
         self._show_page("⚡ Billing")

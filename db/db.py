@@ -11,6 +11,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_LOW_STOCK_THRESHOLD = 20
 if getattr(sys, "frozen", False):
     APP_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "ShopFlowPOS"
     APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -42,7 +43,7 @@ def init_db():
             sale_price REAL NOT NULL,
             stock_qty INTEGER DEFAULT 0,
             category TEXT,
-            low_stock_threshold INTEGER DEFAULT 5
+            low_stock_threshold INTEGER DEFAULT 20
         )
     """)
 
@@ -198,6 +199,19 @@ def init_db():
 
     cur.execute("UPDATE sales SET payment_mode = 'Online Payment' WHERE lower(replace(replace(replace(payment_mode, ' ', ''), '-', ''), '_', '')) IN ('jazzcash', 'easypaisa')")
     cur.execute("UPDATE customer_transactions SET payment_method = 'Online Payment' WHERE lower(replace(replace(replace(payment_method, ' ', ''), '-', ''), '_', '')) IN ('jazzcash', 'easypaisa')")
+    # Raise products that still carry the app's former default warning level.
+    # Run once so any threshold a user sets afterward remains untouched.
+    cur.execute("CREATE TABLE IF NOT EXISTS app_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)")
+    migration = "default_low_stock_threshold_20"
+    if not cur.execute("SELECT 1 FROM app_migrations WHERE name = ?", (migration,)).fetchone():
+        cur.execute("UPDATE products SET low_stock_threshold = 20 WHERE low_stock_threshold = 5")
+        cur.execute("INSERT INTO app_migrations (name, applied_at) VALUES (?, ?)",
+                    (migration, datetime.now().isoformat(timespec="seconds")))
+    uniform_migration = "uniform_low_stock_threshold_20"
+    if not cur.execute("SELECT 1 FROM app_migrations WHERE name = ?", (uniform_migration,)).fetchone():
+        cur.execute("UPDATE products SET low_stock_threshold = ?", (DEFAULT_LOW_STOCK_THRESHOLD,))
+        cur.execute("INSERT INTO app_migrations (name, applied_at) VALUES (?, ?)",
+                    (uniform_migration, datetime.now().isoformat(timespec="seconds")))
 
     stock_sql = cur.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='stock_movements'").fetchone()[0]
     if "damaged_return" not in stock_sql:
@@ -393,7 +407,8 @@ def get_sale_for_return(sale_id):
     try:
         sale = conn.execute("""
             SELECT s.id, s.timestamp, s.total, s.discount, s.payment_mode, s.customer_id,
-                   COALESCE(c.name, 'Walk-in Customer') AS customer_name
+                   COALESCE(c.name, 'Walk-in Customer') AS customer_name,
+                   COALESCE(c.phone, '') AS phone
             FROM sales s
             LEFT JOIN customers c ON c.id = s.customer_id
             WHERE s.id = ?
@@ -624,6 +639,14 @@ def record_customer_payment(customer_id, amount, notes="Payment received", payme
     conn = get_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
+        customer = conn.execute("SELECT balance FROM customers WHERE id = ?", (customer_id,)).fetchone()
+        if not customer:
+            raise ValueError("Customer record not found.")
+        balance_due = float(customer["balance"] or 0)
+        if balance_due <= 0.005:
+            raise ValueError("This customer has no outstanding balance to pay.")
+        if amount > balance_due + 0.0000001:
+            raise ValueError(f"Payment cannot exceed the balance due of Rs {balance_due:,.2f}.")
         timestamp = datetime.now().isoformat(timespec="seconds")
         conn.execute("UPDATE customers SET balance = balance - ? WHERE id = ?", (amount, customer_id))
         cur = conn.execute(
@@ -822,14 +845,15 @@ def get_product(pid):
         conn.close()
 
 
-def create_product(name, barcode, cost_price, sale_price, stock_qty, category, low_stock_threshold=5):
+def create_product(name, barcode, cost_price, sale_price, stock_qty, category,
+                   low_stock_threshold=DEFAULT_LOW_STOCK_THRESHOLD):
     if not name.strip():
         raise ValueError("Product name is required.")
     conn = get_connection()
     try:
         cur = conn.execute(
             "INSERT INTO products (name, barcode, cost_price, sale_price, stock_qty, category, low_stock_threshold) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (name.strip(), barcode.strip() if barcode else None, float(cost_price), float(sale_price), int(stock_qty), category.strip() if category else None, int(low_stock_threshold)),
+            (name.strip(), barcode.strip() if barcode else None, float(cost_price), float(sale_price), int(stock_qty), category.strip() if category else None, DEFAULT_LOW_STOCK_THRESHOLD),
         )
         pid = cur.lastrowid
         conn.commit()
@@ -845,7 +869,7 @@ def update_product(pid, name, barcode, cost_price, sale_price, stock_qty, catego
     try:
         conn.execute(
             "UPDATE products SET name = ?, barcode = ?, cost_price = ?, sale_price = ?, stock_qty = ?, category = ?, low_stock_threshold = ? WHERE id = ?",
-            (name.strip(), barcode.strip() if barcode else None, float(cost_price), float(sale_price), int(stock_qty), category.strip() if category else None, int(low_stock_threshold), pid),
+            (name.strip(), barcode.strip() if barcode else None, float(cost_price), float(sale_price), int(stock_qty), category.strip() if category else None, DEFAULT_LOW_STOCK_THRESHOLD, pid),
         )
         conn.commit()
     finally:
@@ -992,8 +1016,7 @@ def import_products_csv(file_path):
                 if category in ("", "None", "nan", "null"):
                     category = None
 
-                thresh_val = _find_field(row, ["low_stock_threshold", "low stock threshold", "low stock", "threshold", "min stock", "reorder level"])
-                low_stock = int(_clean_number(thresh_val, 5.0))
+                low_stock = DEFAULT_LOW_STOCK_THRESHOLD
 
                 existing = None
                 if barcode:
@@ -1278,6 +1301,58 @@ def close_cash_shift(shift_id, actual, notes=""):
         conn.close()
 
 
+def list_today_cash_closings():
+    now_date = datetime.now().strftime("%Y-%m-%d")
+    conn = get_connection()
+    try:
+        rows = conn.execute("""
+            SELECT * FROM cash_closings
+            WHERE date(timestamp) = ?
+            ORDER BY id DESC
+        """, (now_date,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_day_end_summary():
+    now_date = datetime.now().strftime("%Y-%m-%d")
+    conn = get_connection()
+    try:
+        sales = conn.execute("""
+            SELECT
+                COALESCE(SUM(CASE WHEN payment_mode='Cash' THEN total-exchange_credit ELSE 0 END), 0) AS total_cash,
+                COALESCE(SUM(CASE WHEN payment_mode!='Cash' THEN total-exchange_credit ELSE 0 END), 0) AS total_digital,
+                COALESCE(SUM(total), 0) AS total_revenue,
+                COUNT(id) AS bill_count
+            FROM sales WHERE date(timestamp) = ?
+        """, (now_date,)).fetchone()
+
+        closings = conn.execute("""
+            SELECT
+                COUNT(id) AS shift_count,
+                COALESCE(SUM(discrepancy), 0) AS total_discrepancy,
+                COALESCE(SUM(actual), 0) AS total_counted
+            FROM cash_closings WHERE date(timestamp) = ?
+        """, (now_date,)).fetchone()
+
+        active = conn.execute("SELECT * FROM cash_shifts WHERE closed_at IS NULL ORDER BY id DESC LIMIT 1").fetchone()
+
+        return {
+            "date": now_date,
+            "total_cash": float(sales["total_cash"]),
+            "total_digital": float(sales["total_digital"]),
+            "total_revenue": float(sales["total_revenue"]),
+            "bill_count": int(sales["bill_count"]),
+            "shift_count": int(closings["shift_count"]),
+            "total_discrepancy": float(closings["total_discrepancy"]),
+            "has_active_shift": active is not None,
+            "active_shift": dict(active) if active else None,
+        }
+    finally:
+        conn.close()
+
+
 def list_suppliers():
     conn = get_connection()
     try:
@@ -1386,13 +1461,13 @@ def record_supplier_payment(supplier_id, amount, method="Cash", notes=""):
             allocations.append((purchase["id"],applied))
             remaining -= applied
         if remaining > 0.005:
-            raise ValueError("The supplier balance does not match its outstanding purchase invoices.")
-        conn.execute("UPDATE suppliers SET balance_owed=balance_owed-? WHERE id=?", (amount,supplier_id))
+            allocations.append((None, remaining))
+        conn.execute("UPDATE suppliers SET balance_owed=MAX(0.0, balance_owed-?) WHERE id=?", (amount,supplier_id))
         for purchase_id, applied in allocations:
             conn.execute("INSERT INTO supplier_transactions (supplier_id,purchase_id,type,amount,notes,timestamp) VALUES (?,?,'payment',?,?,?)",
-                         (supplier_id,purchase_id,applied,f"{method}: {notes}".strip(),now))
+                         (supplier_id,purchase_id,applied,f"{method}: {notes}".strip() if notes else f"Payment ({method})",now))
         if method == "Cash":
-            conn.execute("INSERT INTO cash_expenses (amount,notes,timestamp) VALUES (?,?,?)", (amount,f"Supplier payment: {notes}".strip(),now))
+            conn.execute("INSERT INTO cash_expenses (amount,notes,timestamp) VALUES (?,?,?)", (amount,f"Supplier payment: {notes}".strip() if notes else f"Payment to supplier #{supplier_id}",now))
         conn.commit()
     except Exception:
         conn.rollback()

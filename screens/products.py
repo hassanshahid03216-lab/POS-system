@@ -58,7 +58,8 @@ class _ProductForm(QDialog):
         self.category.setPlaceholderText("e.g. Snacks, Dairy, Beverages")
         self.threshold = QSpinBox()
         self.threshold.setRange(0, 2_000_000_000)
-        self.threshold.setToolTip("Trigger low stock alert when quantity reaches this number")
+        self.threshold.setToolTip("The store-wide low stock warning level")
+        self.threshold.setEnabled(False)
 
         for label, widget in (
             ("Product Name *", self.name), ("Barcode (Scan)", self.barcode),
@@ -88,9 +89,7 @@ class _ProductForm(QDialog):
             self.sale.setValue(float(product.get("sale_price") or 0))
             self.stock.setValue(int(product.get("stock_qty") or 0))
             self.category.setText(product.get("category") or "")
-            self.threshold.setValue(int(product.get("low_stock_threshold") or 5))
-        else:
-            self.threshold.setValue(5)
+        self.threshold.setValue(db.DEFAULT_LOW_STOCK_THRESHOLD)
 
     @staticmethod
     def _money_input() -> QDoubleSpinBox:
@@ -315,7 +314,8 @@ class ProductManagementScreen(QWidget):
         low_count = 0
         for p in self._products:
             stock = int(p.get("stock_qty") or 0)
-            thresh = int(p.get("low_stock_threshold") or 5)
+            value = p.get("low_stock_threshold")
+            thresh = int(db.DEFAULT_LOW_STOCK_THRESHOLD if value is None else value)
             is_low = stock <= thresh
             if is_low:
                 low_count += 1

@@ -296,11 +296,22 @@ class SaleReturnsScreen(QWidget):
             (it["qty"] - it["already_returned"]) > 0 for it in items
         )
         if not any_returnable:
-            self._reset_return_form()
+            # Keep a fully returned bill visible for review, including all sold and
+            # returned quantities. It remains a real bill even when its balance is zero.
+            self.items_table.setRowCount(len(items))
+            self.return_spinboxes = []
+            for row, it in enumerate(items):
+                self.items_table.setItem(row, 0, QTableWidgetItem(it["name"]))
+                self.items_table.setItem(row, 1, QTableWidgetItem(f"Rs {float(it['unit_price']):,.2f}"))
+                self.items_table.setItem(row, 2, QTableWidgetItem(str(it["qty"])))
+                self.items_table.setItem(row, 3, QTableWidgetItem(str(it["already_returned"])))
+                self.items_table.setItem(row, 4, QTableWidgetItem("Fully returned"))
             self.bill_info.setText(
                 f"✅ Bill #{sale['id']} — All items have been fully returned."
             )
             self.status.setText(f"Bill #{sale['id']} has no remaining items to return.")
+            self.refund_total_label.setText("Total Refund Amount: Rs 0.00")
+            self.process_btn.setEnabled(False)
             return
 
         self.bill_info.setText(
@@ -402,6 +413,7 @@ class SaleReturnsScreen(QWidget):
             return
 
         sale_id = self.current_sale_data["sale"]["id"]
+        sale_data = self.current_sale_data["sale"].copy()
         notes = self.reason_input.text().strip()
         refund_method = self.refund_method.currentText()
         restock = self.restock_check.isChecked()
@@ -420,7 +432,11 @@ class SaleReturnsScreen(QWidget):
                 "voucher_code": res.get("voucher_code"),
                 "items": returned_items
             }
-            print_or_save_receipt(receipt)
+            # The database return has committed; a printer problem must not hide success.
+            try:
+                print_or_save_receipt(receipt)
+            except Exception as error:
+                print("Return receipt output error:", error)
             return res, receipt
 
         def _on_done(result_tuple):
@@ -434,10 +450,11 @@ class SaleReturnsScreen(QWidget):
 
             # Generate image and copy to clipboard
             self._receipt_img_path = None
+            receipt_image_copied = False
             try:
                 from services.receipt_image import generate_receipt_image, copy_receipt_image_to_clipboard
                 self._receipt_img_path = generate_receipt_image(receipt)
-                copy_receipt_image_to_clipboard(self._receipt_img_path)
+                receipt_image_copied = copy_receipt_image_to_clipboard(self._receipt_img_path)
             except Exception as e:
                 print("Receipt image error:", e)
             
@@ -450,7 +467,8 @@ class SaleReturnsScreen(QWidget):
                 f"Refund method: {refund_method}\n"
                 f"Inventory: {'restocked' if restock else 'recorded as damaged; stock unchanged'}\n"
                 + (f"Voucher code: {res['voucher_code']}\n" if res.get("voucher_code") else "")
-                + "\nDigital receipt image is ready and copied to the clipboard."
+                + ("\nDigital receipt image is ready and copied to the clipboard."
+                   if receipt_image_copied else "\nReceipt image could not be copied; use View Image or Open Folder.")
             )
             img_btn = msg_box.addButton("🖼️  View Image", QMessageBox.ButtonRole.ActionRole)
             fld_btn = msg_box.addButton("📁  Open Folder", QMessageBox.ButtonRole.ActionRole)
