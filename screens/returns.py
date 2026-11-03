@@ -6,8 +6,8 @@ from typing import Any, Callable
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal, Slot
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QAbstractSpinBox, QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QSpinBox, QTableWidget,
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QHeaderView, QLabel,
+    QLineEdit, QMessageBox, QPushButton, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -317,16 +317,12 @@ class SaleReturnsScreen(QWidget):
             self.items_table.setItem(row, 3, QTableWidgetItem(str(it["already_returned"])))
 
             available_to_return = it["qty"] - it["already_returned"]
-            spin = QSpinBox()
-            spin.setRange(0, max(0, available_to_return))
-            spin.setValue(0)
+            spin = QLineEdit("0")
+            spin.setReadOnly(True)
             spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
             spin.setFixedSize(60, 30)
-            spin.setStyleSheet("min-height:30px; max-height:30px; padding:1px 3px; font-size:12px; color:#0F172A; background-color:#FFFFFF;")
-            spin.lineEdit().setStyleSheet("min-height:0px; max-height:28px; padding:0px; font-size:14px; font-weight:700; color:#111111; background-color:#FFFFFF; border:none;")
+            spin.setStyleSheet("min-height:28px; max-height:28px; min-width:60px; padding:0px; font-size:14px; font-weight:700; color:#111111; background-color:#FFFFFF; border:1px solid #CBD5E1;")
             spin.setToolTip(f"Choose 0 to {available_to_return} units to return")
-            spin.valueChanged.connect(self._recalc_refund)
             qty_control = QWidget()
             qty_layout = QHBoxLayout(qty_control)
             qty_layout.setContentsMargins(2, 0, 2, 0)
@@ -336,18 +332,25 @@ class SaleReturnsScreen(QWidget):
             for button in (minus, plus):
                 button.setFixedSize(26, 28)
                 button.setStyleSheet("min-height:26px;max-height:28px;padding:0;font-size:15px;font-weight:700;")
-            minus.clicked.connect(lambda _=False, field=spin: field.setValue(field.value() - 1))
-            plus.clicked.connect(lambda _=False, field=spin: field.setValue(field.value() + 1))
-            spin.valueChanged.connect(lambda value, dec=minus, inc=plus, maximum=available_to_return: (dec.setEnabled(value > 0), inc.setEnabled(value < maximum)))
+            minus.clicked.connect(lambda _=False, r=row, field=spin: self.set_return_qty(r, int(field.text()) - 1))
+            plus.clicked.connect(lambda _=False, r=row, field=spin: self.set_return_qty(r, int(field.text()) + 1))
             minus.setEnabled(False)
             plus.setEnabled(available_to_return > 0)
             qty_layout.addWidget(minus)
             qty_layout.addWidget(spin)
             qty_layout.addWidget(plus)
             self.items_table.setCellWidget(row, 4, qty_control)
-            self.return_spinboxes.append((it, spin))
+            self.return_spinboxes.append((it, spin, minus, plus, available_to_return))
 
         self.process_btn.setEnabled(True)
+        self._recalc_refund()
+
+    def set_return_qty(self, row, value):
+        _, field, minus, plus, maximum = self.return_spinboxes[row]
+        qty = max(0, min(int(value), maximum))
+        field.setText(str(qty))
+        minus.setEnabled(qty > 0)
+        plus.setEnabled(qty < maximum)
         self._recalc_refund()
 
     def _recalc_refund(self):
@@ -366,8 +369,8 @@ class SaleReturnsScreen(QWidget):
         sale_discount = float(self.current_sale_data["sale"].get("discount") or 0)
         bill_discount = min(subtotal_after_item_discounts, max(0.0, sale_discount - item_discounts))
         total_refund = 0.0
-        for it, spin in self.return_spinboxes:
-            qty = spin.value()
+        for it, spin, _, _, _ in self.return_spinboxes:
+            qty = int(spin.text())
             if not qty:
                 continue
             remaining_qty = int(it["qty"]) - int(it.get("already_returned", 0))
@@ -384,8 +387,8 @@ class SaleReturnsScreen(QWidget):
         if not self.current_sale_data:
             return
         returned_items = []
-        for it, spin in self.return_spinboxes:
-            qty = spin.value()
+        for it, spin, _, _, _ in self.return_spinboxes:
+            qty = int(spin.text())
             if qty > 0:
                 returned_items.append({
                     "product_id": it["product_id"],
