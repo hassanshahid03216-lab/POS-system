@@ -5,3 +5,6 @@ fpdf2
 python-escpos
 pywin32; platform_system == "Windows"
 pyinstaller
+fastapi
+uvicorn[standard]
+psycopg[binary]

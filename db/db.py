@@ -21,6 +21,10 @@ else:
 
 
 def get_connection():
+    database_url = os.environ.get("DATABASE_URL", "").strip()
+    if database_url:
+        from db.postgres import connect
+        return connect(database_url)
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     # Enable WAL for better concurrent read/write performance
@@ -31,6 +35,27 @@ def get_connection():
 
 
 def init_db():
+    database_url = os.environ.get("DATABASE_URL", "").strip()
+    if database_url:
+        from db.postgres import connect, initialize
+        conn = connect(database_url)
+        try:
+            initialize(
+                conn,
+                seed_default_user=os.environ.get("SHOPFLOW_REQUIRE_OWNER_SETUP", "1") != "1",
+                hash_pin=hash_pin,
+            )
+        finally:
+            conn.close()
+        return
+    # A cloud-connected desktop is a client, never a database initializer.
+    if not os.environ.get("SHOPFLOW_API_SERVER"):
+        try:
+            from cloud_client import api_url
+            if api_url():
+                return
+        except Exception:
+            pass
     conn = get_connection()
     cur = conn.cursor()
 
@@ -242,7 +267,7 @@ def init_db():
 
 
 def checkout_sale(items, payment_mode, bill_discount=0, held_bill_id=None, customer_id=None,
-                  exchange_credit=0, voucher_code=None):
+                  exchange_credit=0, voucher_code=None, cashier_id=None):
     valid_modes = ("Cash", "Card", "Online Payment", "Credit / Khata")
     if payment_mode not in valid_modes:
         raise ValueError(f"Choose a valid payment mode: {', '.join(valid_modes)}.")
@@ -292,8 +317,8 @@ def checkout_sale(items, payment_mode, bill_discount=0, held_bill_id=None, custo
         timestamp = datetime.now().isoformat(timespec="seconds")
         
         cursor = conn.execute(
-            "INSERT INTO sales (timestamp, customer_id, total, discount, payment_mode, exchange_credit, voucher_code) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (timestamp, customer_id, total, total_discount, payment_mode, exchange_credit, voucher_code),
+            "INSERT INTO sales (timestamp, cashier_id, customer_id, total, discount, payment_mode, exchange_credit, voucher_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (timestamp, cashier_id, customer_id, total, total_discount, payment_mode, exchange_credit, voucher_code),
         )
         sale_id = cursor.lastrowid
         
@@ -1518,3 +1543,125 @@ def export_sales_csv(path, start_date, end_date):
         return len(rows)
     finally:
         conn.close()
+
+
+# Desktop clients retain the existing db.* call sites. When cloud_api_url is
+# configured, those calls are sent to the authenticated API instead of opening
+# a machine-local SQLite file. The API process sets SHOPFLOW_API_SERVER and
+# therefore always executes the real database functions above.
+if not os.environ.get("SHOPFLOW_API_SERVER"):
+    from functools import wraps
+
+    _CLOUD_RPC_METHODS = {
+        "assign_barcode_to_product", "checkout_sale", "save_held_bill", "list_held_bills",
+        "get_held_bill", "list_recent_sales", "get_sale_for_return", "process_sale_return",
+        "return_voucher_balance", "list_customers", "get_customer", "create_customer",
+        "update_customer", "delete_customer", "get_customer_ledger", "record_customer_payment",
+        "get_dashboard_insights", "list_categories", "list_products", "get_product",
+        "create_product", "update_product", "delete_product", "list_users",
+        "delete_user", "update_user_pin", "active_cash_shift", "start_cash_shift",
+        "record_cash_expense", "cash_shift_summary", "close_cash_shift",
+        "list_today_cash_closings", "get_day_end_summary", "list_suppliers", "save_supplier",
+        "record_purchase", "record_supplier_payment", "supplier_ledger",
+    }
+
+    def _cloud_configured():
+        try:
+            from cloud_client import api_url
+            return bool(api_url())
+        except Exception:
+            return False
+
+    def _remote(name, *args, **kwargs):
+        from cloud_client import rpc
+        return rpc(name, args, kwargs)
+
+    _local_authenticate_pin = authenticate_pin
+
+    @wraps(_local_authenticate_pin)
+    def authenticate_pin(pin):
+        if _cloud_configured():
+            from cloud_client import login
+            return login(pin)
+        return _local_authenticate_pin(pin)
+
+    _local_user_count = user_count
+
+    @wraps(_local_user_count)
+    def user_count():
+        if _cloud_configured():
+            from cloud_client import request
+            return int(request("/api/auth/status", auth=False)["users"])
+        return _local_user_count()
+
+    _local_create_user_with_pin = create_user_with_pin
+
+    @wraps(_local_create_user_with_pin)
+    def create_user_with_pin(name, role, pin):
+        if _cloud_configured():
+            from cloud_client import setup_admin, rpc
+            from cloud_client import _token
+            if role == "admin" and not _token and user_count() == 0:
+                return setup_admin(name, pin)
+            return rpc("create_user_with_pin", (name, role, pin), {})
+        return _local_create_user_with_pin(name, role, pin)
+
+    for _method_name in _CLOUD_RPC_METHODS:
+        _local_method = globals()[_method_name]
+
+        def _make_cloud_proxy(method_name, local_method):
+            @wraps(local_method)
+            def _proxy(*args, **kwargs):
+                if _cloud_configured():
+                    return _remote(method_name, *args, **kwargs)
+                return local_method(*args, **kwargs)
+            return _proxy
+
+        globals()[_method_name] = _make_cloud_proxy(_method_name, _local_method)
+
+    _local_import_products_csv = import_products_csv
+
+    @wraps(_local_import_products_csv)
+    def import_products_csv(file_path):
+        if not _cloud_configured():
+            return _local_import_products_csv(file_path)
+        import base64
+        from cloud_client import request
+        with open(file_path, "rb") as source:
+            encoded = base64.b64encode(source.read()).decode("ascii")
+        return request("/api/products/import", {"filename": Path(file_path).name, "content": encoded})
+
+    _local_export_products_csv = export_products_csv
+
+    @wraps(_local_export_products_csv)
+    def export_products_csv(file_path):
+        if not _cloud_configured():
+            return _local_export_products_csv(file_path)
+        rows = list_products()
+        with open(file_path, "w", newline="", encoding="utf-8-sig") as output:
+            writer = csv.writer(output)
+            writer.writerow(["Name", "Barcode", "Cost Price", "Sale Price", "Stock", "Category", "Low Stock"])
+            for row in rows:
+                writer.writerow([row["name"], row.get("barcode") or "", row["cost_price"], row["sale_price"],
+                                 row["stock_qty"], row.get("category") or "", row["low_stock_threshold"]])
+        return len(rows)
+
+    _local_export_sales_csv = export_sales_csv
+
+    @wraps(_local_export_sales_csv)
+    def export_sales_csv(path, start_date, end_date):
+        if not _cloud_configured():
+            return _local_export_sales_csv(path, start_date, end_date)
+        import base64
+        from cloud_client import request
+        result = request("/api/reports/sales.csv", {"start_date": start_date, "end_date": end_date})
+        Path(path).write_bytes(base64.b64decode(result["content"]))
+        return result["count"]
+
+    _local_backup_database = backup_database
+
+    @wraps(_local_backup_database)
+    def backup_database(folder):
+        if _cloud_configured():
+            raise RuntimeError("This computer is connected to the cloud database. Create backups from the Neon dashboard.")
+        return _local_backup_database(folder)

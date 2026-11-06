@@ -15,6 +15,8 @@ DEFAULT_SETTINGS = {
     "currency": "Rs",
     "last_external_backup_date": "",
     "backup_reminder_date": "",
+    # Cloud API URL is per workstation. Credentials never belong in this file.
+    "cloud_api_url": "",
 }
 
 

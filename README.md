@@ -162,6 +162,14 @@ python web_app.py
 ```
 Open your web browser and navigate to `http://localhost:5000`.
 
+### Cloud API (multi-computer testing)
+
+The desktop app can connect to a shared PostgreSQL database through the
+authenticated API. Follow [CLOUD_DEPLOYMENT.md](CLOUD_DEPLOYMENT.md) to deploy
+the API to Render, connect a Neon database, and configure each workstation.
+The free hosting setup is for testing; it starts with a new cloud database and
+does not automatically migrate an existing local `pos.db`.
+
 ---
 
 ## 📦 Building Standalone Windows Executable

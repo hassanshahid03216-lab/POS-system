@@ -9,10 +9,10 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, QRegularExpression, 
 from PySide6.QtGui import QFont, QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
-    QPushButton, QStackedWidget, QVBoxLayout, QWidget, QFileDialog,
+    QPushButton, QStackedWidget, QVBoxLayout, QWidget, QFileDialog, QInputDialog,
 )
 
-from app_settings import load_settings
+from app_settings import load_settings, save_settings
 from db import db
 from .billing import BillingScreen
 from .customers import CustomerKhataScreen
@@ -76,6 +76,17 @@ class LoginScreen(QWidget):
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sub.setFont(QFont("Segoe UI", 10))
         root.addWidget(sub)
+
+        cloud_row = QHBoxLayout()
+        self.cloud_status = QLabel()
+        self._refresh_cloud_status()
+        cloud_row.addStretch()
+        cloud_row.addWidget(self.cloud_status)
+        cloud_button = QPushButton("Configure Cloud Server")
+        cloud_button.clicked.connect(self._configure_cloud_server)
+        cloud_row.addWidget(cloud_button)
+        cloud_row.addStretch()
+        root.addLayout(cloud_row)
 
         prompt = QLabel("Enter your 4-digit Staff PIN")
         prompt.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -161,6 +172,37 @@ class LoginScreen(QWidget):
         root.addWidget(self.status)
         root.addStretch()
 
+        check = _Worker(db.user_count)
+        check.signals.done.connect(lambda count: self.operation_done.emit(self._users_checked, count))
+        check.signals.failed.connect(self.operation_failed.emit)
+        self._worker = check
+        self.pool.start(check)
+
+    def _refresh_cloud_status(self):
+        url = load_settings().get("cloud_api_url", "").strip()
+        self.cloud_status.setText(f"Cloud server: {url}" if url else "Cloud server: this computer only")
+
+    def _configure_cloud_server(self):
+        current = load_settings().get("cloud_api_url", "")
+        value, accepted = QInputDialog.getText(
+            self, "Configure Cloud Server", "API base URL (e.g. https://shopflow-api.onrender.com):", text=current
+        )
+        if not accepted:
+            return
+        value = value.strip().rstrip("/")
+        local_http = value.lower().startswith(("http://localhost", "http://127.0.0.1"))
+        if value and not value.lower().startswith("https://") and not local_http:
+            QMessageBox.warning(self, "HTTPS Required", "Use an https:// URL. HTTP is allowed only for localhost development.")
+            return
+        save_settings({"cloud_api_url": value})
+        from cloud_client import clear_token
+        clear_token()
+        self._refresh_cloud_status()
+        QMessageBox.information(
+            self, "Cloud Server Updated",
+            "This computer will use the shared cloud database after you sign in."
+            if value else "Cloud mode is disabled. This computer will use its local database.",
+        )
         check = _Worker(db.user_count)
         check.signals.done.connect(lambda count: self.operation_done.emit(self._users_checked, count))
         check.signals.failed.connect(self.operation_failed.emit)
@@ -379,6 +421,11 @@ class _Workspace(QWidget):
                 self._update_drawer_button()
                 if db.active_cash_shift():
                     return
+        try:
+            from cloud_client import clear_token
+            clear_token()
+        except Exception:
+            pass
         self.logged_out.emit()
 
     def _cash_closing(self):
@@ -433,6 +480,8 @@ class ShopFlowWindow(QMainWindow):
         from datetime import date
         from app_settings import save_settings
         settings = load_settings()
+        if settings.get("cloud_api_url"):
+            return
         today = date.today().isoformat()
         last = settings.get("last_external_backup_date")
         try:
