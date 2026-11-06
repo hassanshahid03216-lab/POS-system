@@ -8,3 +8,4 @@ pyinstaller
 fastapi
 uvicorn[standard]
 psycopg[binary]
+python-dotenv

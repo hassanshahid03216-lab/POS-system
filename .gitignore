@@ -12,3 +12,6 @@ build/
 dist/
 .vscode/
 .idea/
+.neon
+node_modules/
+.env.local

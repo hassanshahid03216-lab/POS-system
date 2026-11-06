@@ -19,6 +19,14 @@ from collections import defaultdict, deque
 from datetime import date
 from pathlib import Path
 
+# `neon env pull` writes the project connection string to one of these files.
+# Existing process variables (such as Render's dashboard variables) win.
+from dotenv import load_dotenv
+
+for _env_file in (Path(".env.local"), Path(".env")):
+    if _env_file.is_file():
+        load_dotenv(_env_file, override=False)
+
 os.environ["SHOPFLOW_API_SERVER"] = "1"
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request

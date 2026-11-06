@@ -38,7 +38,10 @@ def init_db():
     database_url = os.environ.get("DATABASE_URL", "").strip()
     if database_url:
         from db.postgres import connect, initialize
-        conn = connect(database_url)
+        # Use Neon direct connections for one-time schema setup; normal API
+        # requests continue through the pooled DATABASE_URL.
+        schema_url = os.environ.get("DATABASE_URL_UNPOOLED", "").strip() or database_url
+        conn = connect(schema_url)
         try:
             initialize(
                 conn,
@@ -449,7 +452,7 @@ def get_sale_for_return(sale_id):
             LEFT JOIN sale_returns sr ON sr.sale_id = si.sale_id
             LEFT JOIN sale_return_items sri ON sri.return_id = sr.id AND sri.product_id = si.product_id
             WHERE si.sale_id = ?
-            GROUP BY si.product_id
+            GROUP BY si.product_id, p.name, p.barcode, si.qty, si.unit_price, si.discount
         """, (sale_id,)).fetchall()
         
         return {

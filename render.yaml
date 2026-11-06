@@ -9,6 +9,8 @@ services:
     envVars:
       - key: DATABASE_URL
         sync: false
+      - key: DATABASE_URL_UNPOOLED
+        sync: false
       - key: API_SIGNING_SECRET
         generateValue: true
       - key: SHOPFLOW_REQUIRE_OWNER_SETUP

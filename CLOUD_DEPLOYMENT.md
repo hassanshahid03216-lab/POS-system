@@ -7,8 +7,9 @@ stays on the API service and is never stored on cashier PCs.
 ## 1. Create the Neon database
 
 1. Create a Neon project and database.
-2. Copy the connection string from the Neon dashboard. Use the pooled
-   connection string if Neon offers one for the project.
+2. Run `neon env pull` to populate `.env.local` with `DATABASE_URL` and
+   `DATABASE_URL_UNPOOLED`. The API uses the pooled URL for ordinary requests
+   and the direct URL when it initializes the schema.
 3. Keep the string private. Do not put it in source code, a committed `.env`
    file, or the desktop application's settings.
 
@@ -16,13 +17,18 @@ The API creates the ShopFlow schema during startup. The first workstation to
 connect will show the owner setup flow because the cloud database starts with
 no default user.
 
+For a new, empty Neon branch, run `npm run build`, start the API locally, then
+run `.venv\\Scripts\\python.exe scripts\\neon_smoke.py`. The smoke check refuses
+to run if users already exist and removes its uniquely marked test records.
+
 ## 2. Deploy the API to Render
 
 1. Push this repository to a Git provider that Render can access.
 2. In Render, create a Blueprint from the repository and select `render.yaml`
    at the repository root. It defines the Python API web service.
-3. Set the `DATABASE_URL` environment variable for the service to the Neon
-   connection string. Render generates `API_SIGNING_SECRET` from the Blueprint.
+3. Set both `DATABASE_URL` and `DATABASE_URL_UNPOOLED` in the Render service
+   environment using the values from Neon. Render generates
+   `API_SIGNING_SECRET` from the Blueprint.
 4. Deploy and wait for `/health` to report `{"status":"ok"}`.
 5. Copy the service's HTTPS URL, such as `https://shopflow-pos-api.onrender.com`.
 

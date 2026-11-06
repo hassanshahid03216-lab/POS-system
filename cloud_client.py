@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import urllib.error
 import urllib.request
 
@@ -12,7 +13,7 @@ _token = None
 
 
 def api_url() -> str:
-    return str(load_settings().get("cloud_api_url", "")).strip().rstrip("/")
+    return str(os.environ.get("SHOPFLOW_API_URL") or load_settings().get("cloud_api_url", "")).strip().rstrip("/")
 
 
 def set_token(token):
